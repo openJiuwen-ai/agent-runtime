@@ -66,7 +66,7 @@ try {
   });
   await test('template editor loads all resource pages and surfaces failed loads', async () => {
     const { loadTemplateOptions } = await server.ssrLoadModule('/src/services/templateOptions.ts');
-    for (const key of ['EmbeddingTemplateApi', 'ExtensionTemplateApi', 'McpTemplateApi', 'PermissionsTemplateApi', 'SkillPrebuiltTemplateApi', 'A2AAccessPolicyTemplateApi', 'ExpertPackageTemplateApi']) {
+    for (const key of ['EmbeddingTemplateApi', 'ExtensionTemplateApi', 'McpTemplateApi', 'PermissionsTemplateApi', 'ExecutionGuardTemplateApi', 'SkillPrebuiltTemplateApi', 'A2AAccessPolicyTemplateApi', 'ExpertPackageTemplateApi']) {
       api[key].list = async () => ({ items: [], total: 0, page_size: 100 });
     }
     api.ModelTemplateApi.list = async ({ page, enabled }) => {
@@ -77,9 +77,14 @@ try {
       assert.equal(enabled, true);
       return { items: [{ template_id: `expert-${page}`, template_name: `Experts ${page}` }], total: 2, page_size: 1 };
     };
+    api.ExecutionGuardTemplateApi.list = async ({ page, enabled }) => {
+      assert.equal(enabled, true);
+      return { items: [{ template_id: `guard-${page}`, template_name: `Guard ${page}` }], total: 2, page_size: 1 };
+    };
     const options = await loadTemplateOptions();
     assert.deepEqual(options.default_model.map(option => option.template_id), ['model-1', 'model-2']);
     assert.deepEqual(options.expert_package.map(option => option.template_id), ['expert-1', 'expert-2']);
+    assert.deepEqual(options.execution_guard.map(option => option.template_id), ['guard-1', 'guard-2']);
     api.ExpertPackageTemplateApi.list = async () => { throw new Error('Expert packages unavailable'); };
     await assert.rejects(loadTemplateOptions, /Expert packages unavailable/);
     api.ExpertPackageTemplateApi.list = async () => ({ items: [], total: 0 });

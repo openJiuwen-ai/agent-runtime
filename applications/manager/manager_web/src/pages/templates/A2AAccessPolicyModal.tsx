@@ -4,12 +4,14 @@ import { Modal, ModalCancelButton } from '../../components/Modal';
 import { ConfigRefreshCostHint } from '../../components/ConfigRefreshCostHint';
 import { A2AAccessPolicyTemplateApi, A2AOutboundTemplateApi, ApiError } from '../../services/api';
 import { toast } from '../../stores/uiStore';
+import { useFormDirty } from '../../hooks/useFormDirty';
 import type { A2AAccessPolicyMode, A2AAccessPolicyTemplate, A2AOutboundTemplate } from '../../types';
 
-interface Props { open: boolean; policy: A2AAccessPolicyTemplate | null; onClose: () => void; onSaved: () => void; }
+interface Props { open: boolean; policy: A2AAccessPolicyTemplate | null; copyFrom?: A2AAccessPolicyTemplate; onClose: () => void; onSaved: (saved: A2AAccessPolicyTemplate) => void; }
 
-export function A2AAccessPolicyModal({ open, policy, onClose, onSaved }: Props) {
+export function A2AAccessPolicyModal({ open, policy, copyFrom, onClose, onSaved }: Props) {
   const { t } = useTranslation();
+  const { markClean, isDirty } = useFormDirty(open);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [mode, setMode] = useState<A2AAccessPolicyMode>('allowlist');
@@ -21,9 +23,12 @@ export function A2AAccessPolicyModal({ open, policy, onClose, onSaved }: Props) 
 
   useEffect(() => {
     if (!open) return;
-    setName(policy?.policy_name ?? ''); setDescription(policy?.description ?? '');
-    setMode(policy?.mode ?? 'allowlist'); setEnabled(policy?.enabled ?? true);
-    setMembers(policy?.member_template_ids ?? []);
+    const sourcePolicy = policy ?? copyFrom;
+    const nextName = !policy && copyFrom ? `${copyFrom.policy_name.slice(0, 117)} - copy` : sourcePolicy?.policy_name ?? '';
+    setName(nextName); setDescription(sourcePolicy?.description ?? '');
+    setMode(sourcePolicy?.mode ?? 'allowlist'); setEnabled(sourcePolicy?.enabled ?? true);
+    setMembers(sourcePolicy?.member_template_ids ?? []);
+    markClean({ name: nextName, description: sourcePolicy?.description ?? '', mode: sourcePolicy?.mode ?? 'allowlist', enabled: sourcePolicy?.enabled ?? true, members: sourcePolicy?.member_template_ids ?? [] });
     setAgentSearch('');
     const loadAgents = async () => {
       const first = await A2AOutboundTemplateApi.list({ page: 1, page_size: 200 });
@@ -38,7 +43,7 @@ export function A2AAccessPolicyModal({ open, policy, onClose, onSaved }: Props) 
     void loadAgents()
       .then(setAgents)
       .catch((e) => toast('danger', e instanceof ApiError ? e.detail : (e as Error).message));
-  }, [open, policy]);
+  }, [open, policy, copyFrom, markClean]);
 
   const toggleMember = (id: string) => setMembers((current) =>
     current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
@@ -54,14 +59,15 @@ export function A2AAccessPolicyModal({ open, policy, onClose, onSaved }: Props) 
     setSaving(true);
     try {
       const body = { policy_name: name.trim(), description: description.trim() || null, mode, member_template_ids: members, enabled };
-      if (policy) await A2AAccessPolicyTemplateApi.update(policy.policy_id, body);
-      else await A2AAccessPolicyTemplateApi.create(body);
-      toast('success', t('success.saved')); onSaved();
+      const saved = policy ? await A2AAccessPolicyTemplateApi.update(policy.policy_id, body)
+        : await A2AAccessPolicyTemplateApi.create(body);
+      toast('success', t('success.saved')); onSaved(saved);
     } catch (e) { toast('danger', e instanceof ApiError ? e.detail : (e as Error).message); }
     finally { setSaving(false); }
   };
 
   return <Modal open={open} title={policy ? t('a2a.editPolicyTitle') : t('a2a.newPolicyTitle')} onClose={onClose} size="lg"
+    dirty={isDirty({ name, description, mode, enabled, members })}
     footer={<><ModalCancelButton /><button className="btn primary" disabled={saving || !name.trim()} onClick={() => void save()}>{t('common.save')}</button></>}>
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
       <div><label className="label">{t('a2a.policyName')}</label><input className="input" maxLength={128} value={name} onChange={(e) => setName(e.target.value)} /></div>

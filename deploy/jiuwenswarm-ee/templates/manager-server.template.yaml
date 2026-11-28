@@ -27,13 +27,13 @@ spec:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: <<MANAGER_SERVER_NAME>>-sa
+  name: jiuwenswarm-manager-server-sa
   namespace: <<NAMESPACE>>
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: <<MANAGER_SERVER_NAME>>-inventory
+  name: jiuwenswarm-manager-server-inventory
   namespace: <<NAMESPACE>>
 rules:
   - apiGroups: [""]
@@ -43,22 +43,22 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: <<MANAGER_SERVER_NAME>>-inventory
+  name: jiuwenswarm-manager-server-inventory
   namespace: <<NAMESPACE>>
 subjects:
   - kind: ServiceAccount
-    name: <<MANAGER_SERVER_NAME>>-sa
+    name: jiuwenswarm-manager-server-sa
     namespace: <<NAMESPACE>>
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: <<MANAGER_SERVER_NAME>>-inventory
+  name: jiuwenswarm-manager-server-inventory
 ---
 # Summary 用量：nodes/proxy（RBAC 无法限到 /stats/summary；仅授予 get）
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: <<MANAGER_SERVER_NAME>>-kubelet-summary-<<NAMESPACE>>
+  name: jiuwenswarm-manager-server-kubelet-summary-<<NAMESPACE>>
 rules:
   - apiGroups: [""]
     resources: ["nodes"]
@@ -70,15 +70,15 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: <<MANAGER_SERVER_NAME>>-kubelet-summary-<<NAMESPACE>>
+  name: jiuwenswarm-manager-server-kubelet-summary-<<NAMESPACE>>
 subjects:
   - kind: ServiceAccount
-    name: <<MANAGER_SERVER_NAME>>-sa
+    name: jiuwenswarm-manager-server-sa
     namespace: <<NAMESPACE>>
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: <<MANAGER_SERVER_NAME>>-kubelet-summary-<<NAMESPACE>>
+  name: jiuwenswarm-manager-server-kubelet-summary-<<NAMESPACE>>
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -95,12 +95,7 @@ spec:
       labels:
         app: jiuwenswarm-manager-server
     spec:
-<<<<<<< HEAD
-      serviceAccountName: <<MANAGER_SERVER_NAME>>-sa
-      securityContext:
-        fsGroup: <<SWARM_FS_GROUP>>
-=======
->>>>>>> 57c0a3f2 (refactor(docker): 镜像构建文件收敛 docker/jiuwenswarm-ee，基础镜像移仓 agent-runtime，部署工具将老版的删除，将新版收敛于deploy/jiuwenswarm-ee)
+      serviceAccountName: jiuwenswarm-manager-server-sa
       volumes:
         - name: web-probe-ca
           configMap:
@@ -154,10 +149,6 @@ spec:
         - name: MANAGER_PG_SCHEMA
           value: "<<MANAGER_PG_SCHEMA>>"
         - name: IDENTITY_PUBLIC_KEY_URL
-<<<<<<< HEAD
-          value: "http://<<IDENTITY_NAME>>:<<IDENTITY_REST_PORT>>/v1/auth/public_key"
-        # nginx 变量 proxy_pass 需 FQDN；短名作回退时由 Manager 扩成 *.svc.cluster.local
-=======
           value: "http://jiuwenswarm-identity:8770/v1/auth/public_key"
         # 三模式部署形态（off 时 manager 跳过 Runtime 探活；routing/full 探活 agent-runtime /healthz）
         - name: AGENT_RUNTIME_DEPLOY_MODE
@@ -169,7 +160,6 @@ spec:
         # MANAGER_WEB_*_TARGET 为 manager-web nginx 的 proxy_pass 上游（nginx 要求 FQDN）
         - name: MANAGER_WEB_USER_WEB_TARGET
           value: "https://jiuwenswarm-web.<<NAMESPACE>>.svc.cluster.local:5173"
->>>>>>> 57c0a3f2 (refactor(docker): 镜像构建文件收敛 docker/jiuwenswarm-ee，基础镜像移仓 agent-runtime，部署工具将老版的删除，将新版收敛于deploy/jiuwenswarm-ee)
         - name: MANAGER_WEB_GATEWAY_HTTP_TARGET
           value: "http://jiuwenswarm-gateway.<<NAMESPACE>>.svc.cluster.local:19000"
         - name: MANAGER_WEB_GATEWAY_WS_TARGET

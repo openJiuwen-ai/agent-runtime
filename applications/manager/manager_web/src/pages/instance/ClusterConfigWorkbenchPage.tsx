@@ -5,6 +5,7 @@ import { useClusterSetupProgress } from '../../hooks/useClusterSetupProgress';
 import { ClusterWorkspaceNavigation } from '../../components/ClusterWorkspaceNavigation';
 import { ClusterReadinessPanel } from './ClusterReadinessPanel';
 import { WorkspaceNote } from '../../components/WorkspaceNote';
+import { guidedClusterResumeStage, guidedClusterWizardPath } from '../../utils/clusterWizard';
 import './ClusterConfigWorkbenchPage.css';
 
 /**
@@ -86,6 +87,16 @@ export function ClusterConfigWorkbenchPage({ instanceId }: { instanceId: string 
         section="cluster-config"
         onRefresh={() => void state.reload()}
       />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted">{t('redesign.workbench.guidedSetupHint')}</p>
+        <button
+          type="button"
+          className="btn"
+          onClick={() => navigate(guidedClusterWizardPath(instanceId, guidedClusterResumeStage(data.nextSection), params))}
+        >
+          {t('redesign.workbench.continueGuidedSetup')} →
+        </button>
+      </div>
       <section className="cluster-setup-grid" aria-label={t('redesign.workbench.setupSteps')}>
         {steps.map((item, index) => (
           <article

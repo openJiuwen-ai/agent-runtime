@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ConfigRefreshCostHint } from '../../components/ConfigRefreshCostHint';
 import { Modal, ModalCancelButton } from '../../components/Modal';
+import { useEditorPresentation } from '../../components/InlineEditorContext';
 import { Switch } from '../../components/Switch';
 import { TemplateRefEditor } from '../../components/TemplateRefEditor';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
@@ -20,6 +21,7 @@ import {
 interface Props {
   open: boolean;
   template: AgentTemplate | null;
+  copyFrom?: AgentTemplate;
   onClose: () => void;
   onSaved: (saved: AgentTemplate) => void;
 }
@@ -78,28 +80,31 @@ function parseCustomConfig(text: string): {
   }
 }
 
-export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) {
+export function AgentTemplateModal({ open, template, copyFrom, onClose, onSaved }: Props) {
   const { t } = useTranslation();
   const { markClean, isDirty } = useFormDirty(open);
   const [form, setForm] = useState<FormState>(empty);
   const [saving, setSaving] = useState(false);
+  const presentation = useEditorPresentation();
+  const sourceTemplate = template ?? copyFrom;
   const currentTemplate = template;
   const busy = saving;
 
   useEffect(() => {
     if (!open) return;
-    const next: FormState = template
+    const next: FormState = sourceTemplate
       ? {
-          template_name: template.template_name.slice(0, FIELD_MAX_LENGTH.template_name),
-          description: (template.description ?? '').slice(0, FIELD_MAX_LENGTH.description),
-          template_ref: normalizeTemplateRefFromApi(template.template_ref),
-          custom_config_json: customConfigText(template.data),
-          upload_local_skill: template.data?.upload_local_skill === true,
+          template_name: sourceTemplate.template_name.slice(0, FIELD_MAX_LENGTH.template_name),
+          description: (sourceTemplate.description ?? '').slice(0, FIELD_MAX_LENGTH.description),
+          template_ref: normalizeTemplateRefFromApi(sourceTemplate.template_ref),
+          custom_config_json: customConfigText(sourceTemplate.data),
+          upload_local_skill: sourceTemplate.data?.upload_local_skill === true,
         }
       : empty;
+    if (!template && copyFrom) next.template_name = `${next.template_name.slice(0, 117)} - copy`;
     setForm(next);
     markClean(next);
-  }, [open, template, markClean]);
+  }, [open, template, copyFrom, markClean]);
 
   const update = <K extends keyof FormState>(k: K, v: FormState[K]) =>
     setForm((s) => ({ ...s, [k]: v }));
@@ -132,9 +137,9 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
     }
 
     const nextData: Record<string, unknown> = {
-      ...(currentTemplate?.data ?? {}),
+      ...(sourceTemplate?.data ?? {}),
     };
-    if (form.custom_config_json !== customConfigText(currentTemplate?.data ?? null)) {
+    if (form.custom_config_json !== customConfigText(sourceTemplate?.data ?? null)) {
       nextData.custom_config = customConfig.value;
     }
     nextData.upload_local_skill = form.upload_local_skill;
@@ -205,6 +210,7 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
             key={template?.template_id ?? 'new'}
             resourceLinksInNewTab
             collapseOptional
+            expandOptional={presentation.readOnly || !!customConfig.error}
             label={t('agentTemplate.templateRef')}
             hint={t('agentTemplate.templateRefHint')}
             requiredSlots={['default_model']}

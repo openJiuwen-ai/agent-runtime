@@ -1,0 +1,9 @@
+.wizard-step-heading { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+.wizard-step-heading > div:first-child { flex: 1; min-width: 0; }
+.wizard-step-heading__step { color: var(--muted); font-size: 12px; }
+.wizard-step-heading h2 { margin: 4px 0 0; font-size: 21px; font-weight: 650; }
+.wizard-step-heading p { margin: 8px 0 0; color: var(--muted); font-size: 13px; line-height: 1.65; }
+.wizard-step-heading__actions { display: flex; align-items: center; gap: 8px; padding-top: 22px; }
+.wizard-step-heading + .wizard-card > fieldset > .wizard-form-grid { margin-top: 0; }
+.wizard-step-heading + .wizard-card > .wizard-verification__checks:first-child { margin-top: 0; }
+@media (max-width: 600px) { .wizard-step-heading__actions { padding-top: 0; } }

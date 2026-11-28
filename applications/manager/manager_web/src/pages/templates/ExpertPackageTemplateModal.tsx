@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal, ModalCancelButton } from '../../components/Modal';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
+import { useFormDirty } from '../../hooks/useFormDirty';
 import { Switch } from '../../components/Switch';
 import { ExpertPackageTemplateApi, PackageCatalogApi, ApiError } from '../../services/api';
 import { toast } from '../../stores/uiStore';
@@ -10,8 +11,9 @@ import type { ExpertPackageKind, ExpertPackageTemplate, PackageCatalogItem, Swar
 interface Props {
   open: boolean;
   template: ExpertPackageTemplate | null;
+  copyFrom?: ExpertPackageTemplate;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (saved: ExpertPackageTemplate) => void;
   /** 409 冲突：关弹窗并刷新列表，语义与 onSaved 分离。 */
   onConflict: () => void;
 }
@@ -61,8 +63,9 @@ function parsePositiveInt(value: string): number | null {
   return Number.isInteger(n) && n >= 1 ? n : null;
 }
 
-export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, onConflict }: Props) {
+export function ExpertPackageTemplateModal({ open, template, copyFrom, onClose, onSaved, onConflict }: Props) {
   const { t } = useTranslation();
+  const { markClean, isDirty } = useFormDirty(open);
   const editing = template !== null;
   const [catalog, setCatalog] = useState<PackageCatalogItem[]>([]);
   const [catalogError, setCatalogError] = useState('');
@@ -75,22 +78,27 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, o
 
   useEffect(() => {
     if (!open) return;
-    if (template) {
-      setName(template.template_name);
-      setDescription(template.description || '');
-      setSwarmflow({ ...DEFAULT_SWARMFLOW, ...(template.swarmflow ?? {}) });
-      setSelected((template.packages ?? []).map((item) => ({
-        kind: item.kind,
-        id: item.asset_id,
-        displayName: item.asset_id,
-        version: item.version || '',
-      })));
-    } else {
-      setName('');
-      setDescription('');
-      setSwarmflow(DEFAULT_SWARMFLOW);
-      setSelected([]);
-    }
+    const sourceTemplate = template ?? copyFrom;
+    const nextName = sourceTemplate
+      ? !template && copyFrom ? `${sourceTemplate.template_name.slice(0, 117)} - copy` : sourceTemplate.template_name
+      : '';
+    const nextSwarmflow = { ...DEFAULT_SWARMFLOW, ...(sourceTemplate?.swarmflow ?? {}) };
+    const nextSelected = (sourceTemplate?.packages ?? []).map((item) => ({
+      kind: item.kind,
+      id: item.asset_id,
+      displayName: item.asset_id,
+      version: item.version || '',
+    }));
+    setName(nextName);
+    setDescription(sourceTemplate?.description || '');
+    setSwarmflow(nextSwarmflow);
+    setSelected(nextSelected);
+    markClean({
+      name: nextName,
+      description: sourceTemplate?.description || '',
+      selected: nextSelected.map(item => `${item.kind}:${item.id}:${item.version}`).sort(),
+      swarmflow: nextSwarmflow,
+    });
     setCatalogLoading(true);
     setCatalogError('');
     PackageCatalogApi.catalog()
@@ -113,7 +121,7 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, o
         setCatalogError(error instanceof ApiError ? error.detail : (error as Error).message);
       })
       .finally(() => setCatalogLoading(false));
-  }, [open, template]);
+  }, [open, template, copyFrom, markClean]);
 
   const toggle = (item: PackageCatalogItem) => {
     const key = itemKey(item);
@@ -164,8 +172,9 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, o
     }));
     setSaving(true);
     try {
+      let saved: ExpertPackageTemplate;
       if (editing && template) {
-        await ExpertPackageTemplateApi.update(template.template_id, {
+        saved = await ExpertPackageTemplateApi.update(template.template_id, {
           template_name: templateName,
           description: description.trim(),
           packages,
@@ -173,7 +182,7 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, o
           expected_revision: template.revision ?? 0,
         });
       } else {
-        await ExpertPackageTemplateApi.create({
+        saved = await ExpertPackageTemplateApi.create({
           template_name: templateName,
           description: description.trim(),
           packages,
@@ -182,7 +191,7 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, o
         });
       }
       toast('success', t('success.saved'));
-      onSaved();
+      onSaved(saved);
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
         toast('danger', t('expertPackageTemplate.conflictStale'));
@@ -250,6 +259,7 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, o
       open={open}
       title={editing ? t('expertPackageTemplate.edit') : t('expertPackageTemplate.new')}
       onClose={onClose}
+      dirty={isDirty({ name, description, selected: selected.map(item => `${item.kind}:${item.id}:${item.version}`).sort(), swarmflow })}
       size="lg"
       footer={
         <>

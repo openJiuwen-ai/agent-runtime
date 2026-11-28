@@ -3,13 +3,22 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useState,
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
+import { useEditorPresentation, useInlineEditor } from './InlineEditorContext';
 
 const ModalRequestCloseContext = createContext<(() => void) | null>(null);
+const ReadOnlyEditorActionsContext = createContext<HTMLDivElement | null>(null);
+
+/** Read-only forms keep their controls disabled while linked resources remain inspectable. */
+export function ReadOnlyEditorActions({ children }: { children: ReactNode }) {
+  const target = useContext(ReadOnlyEditorActionsContext);
+  return target ? createPortal(children, target) : null;
+}
 
 /** 在 Modal 内请求关闭（有未保存编辑时会先确认） */
 export function useModalRequestClose(): () => void {
@@ -61,14 +70,27 @@ export function Modal({
 }: ModalProps) {
   const { t } = useTranslation();
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [readOnlyActionsTarget, setReadOnlyActionsTarget] = useState<HTMLDivElement | null>(null);
+  const inline = useInlineEditor();
+  const presentation = useEditorPresentation();
+  const editorId = useId();
+  const register = inline?.register;
+  const unregister = inline?.unregister;
+  const active = !inline || (inline.active && inline.activeId === editorId);
+
+  useEffect(() => {
+    if (!open || !register || !unregister) return;
+    register(editorId);
+    return () => unregister(editorId);
+  }, [open, register, unregister, editorId]);
 
   const requestClose = useCallback(() => {
-    if (dirty) {
+    if (dirty && !presentation.readOnly) {
       setConfirmOpen(true);
       return;
     }
     onClose();
-  }, [dirty, onClose]);
+  }, [dirty, presentation.readOnly, onClose]);
 
   const confirmDiscard = useCallback(() => {
     setConfirmOpen(false);
@@ -80,7 +102,7 @@ export function Modal({
   }, [open]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !active) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       e.stopPropagation();
@@ -92,9 +114,32 @@ export function Modal({
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [open, confirmOpen, requestClose]);
+  }, [open, active, confirmOpen, requestClose]);
 
   if (!open) return null;
+
+  if (inline) {
+    if (!inline.target) return null;
+    return createPortal(<ModalRequestCloseContext.Provider value={requestClose}><ReadOnlyEditorActionsContext.Provider value={readOnlyActionsTarget}>
+      <section className="inline-editor-panel" hidden={!active} aria-label={title}>
+        <div className="modal-header">
+          <div className="modal-title">{title}</div>
+          <button type="button" className="btn ghost sm" onClick={requestClose}>{t('common.back', { defaultValue: '返回上一级' })}</button>
+        </div>
+        <div className="modal-body">
+          <fieldset className="inline-editor-fields" disabled={presentation.readOnly}>{children}</fieldset>
+          {presentation.readOnly && <div ref={setReadOnlyActionsTarget} className="inline-editor-readonly-actions" />}
+        </div>
+        {confirmOpen ? <div className="inline-editor-confirm" role="alert">
+          <p>{t('common.unsavedMessage')}</p>
+          <div className="inline-editor-confirm__actions">
+            <button type="button" className="btn" onClick={() => setConfirmOpen(false)}>{t('common.cancel')}</button>
+            <button type="button" className="btn danger" onClick={confirmDiscard}>{t('common.unsavedDiscard')}</button>
+          </div>
+        </div> : <div className="modal-footer">{presentation.footer ?? (presentation.readOnly ? <ModalCancelButton>{t('common.back', { defaultValue: '返回上一级' })}</ModalCancelButton> : footer)}</div>}
+      </section>
+    </ReadOnlyEditorActionsContext.Provider></ModalRequestCloseContext.Provider>, inline.target);
+  }
 
   // 经 portal 挂到 body：避免祖先的 transform/hover（如卡片 hover 位移）把
   // position:fixed 的遮罩当成包含块，导致弹窗被限制在小方格内。

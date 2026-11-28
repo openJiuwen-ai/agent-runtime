@@ -2025,6 +2025,8 @@
     "authorizationNoteText": "Users or organizations are “who”, roles are “what they can do”, and service instances are “where it takes effect”. Prepare identities and roles first, then configure cluster admission and Agent usage in a service instance.",
     "authorizationNoteAction": "Configure service instances →",
     "workbench": {
+      "guidedSetupHint": "Use the guided flow for step-by-step setup, or edit individual settings below.",
+      "continueGuidedSetup": "Continue guided setup",
       "loading": "Loading cluster configuration…",
       "loadFailed": "Unable to load cluster configuration",
       "retry": "Retry",

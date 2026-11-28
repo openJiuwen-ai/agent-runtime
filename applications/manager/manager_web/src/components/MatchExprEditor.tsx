@@ -22,10 +22,12 @@ import {
 import { OrgApi, UserApi } from '../services/api';
 import { useAsync } from '../hooks/useAsync';
 import { loadMatchAgentOptions } from '../services/matchAgentOptions';
+import { collectPages } from '../utils/overview';
 
 interface SelectOption { id: string; label: string }
 
 const MatchFieldsContext = createContext<MatchField[]>(MATCH_FIELDS);
+const MatchOptionsContext = createContext<Partial<Record<MatchField, SelectOption[]>>>({});
 const MatchAgentOptionsContext = createContext<{
   options: SelectOption[];
   resourceScoped: boolean;
@@ -34,20 +36,9 @@ const MatchAgentOptionsContext = createContext<{
 }>({ options: [], resourceScoped: false, loading: false, error: null });
 
 function useFieldOptions(field: MatchField): SelectOption[] {
-  const { options: agents } = useContext(MatchAgentOptionsContext);
-  const { data: orgs } = useAsync(() => OrgApi.list(), []);
-  const { data: users } = useAsync(() => UserApi.list(), []);
-
-  return useMemo(() => {
-    switch (field) {
-      case 'group_id':
-        return (orgs?.items ?? []).map((o) => ({ id: o.group_id, label: o.display_name || o.group_id }));
-      case 'user_id':
-        return (users?.items ?? []).map((u) => ({ id: u.user_id, label: u.display_name || u.user_id }));
-      case 'bot_id':
-        return agents;
-    }
-  }, [field, orgs, users, agents]);
+  const directory = useContext(MatchOptionsContext);
+  const agents = useContext(MatchAgentOptionsContext);
+  return field === 'bot_id' ? agents.options : directory[field] ?? [];
 }
 
 function TrashIcon() {
@@ -549,6 +540,8 @@ interface MatchExprEditorProps {
   allowedFields?: MatchField[];
   /** Runtime 授权传当前集群 ID，按集群 Agent 资源选择；省略时保持模板选项。 */
   agentResourceInstanceId?: string;
+  /** Refresh choices after identities or resources were created in a preceding step. */
+  revision?: number;
 }
 
 export function MatchExprEditor({
@@ -556,6 +549,7 @@ export function MatchExprEditor({
   onChange,
   allowedFields = MATCH_FIELDS,
   agentResourceInstanceId,
+  revision = 0,
 }: MatchExprEditorProps) {
   const { t } = useTranslation();
   const fields = useMemo(
@@ -564,15 +558,28 @@ export function MatchExprEditor({
   );
   const [model, setModel] = useState<MatchExprModel>(() => parseMatchExpr(value));
   const lastEmittedRef = useRef(value);
+  const loadOptions = model.mode === 'custom';
   const loadAgents = fields.includes('bot_id');
+  const directory = useAsync(async () => {
+    if (!loadOptions) return { revision, options: {} };
+    const [orgs, users] = await Promise.all([
+      collectPages((page, page_size) => OrgApi.list({ page, page_size })),
+      collectPages((page, page_size) => UserApi.list({ page, page_size })),
+    ]);
+    return { revision, options: {
+      group_id: orgs.map(row => ({ id: row.group_id, label: row.display_name || row.group_id })),
+      user_id: users.map(row => ({ id: row.user_id, label: row.display_name || row.user_id })),
+    } };
+  }, [loadOptions, revision]);
   const { data: agents, loading: agentsLoading, error: agentsError } = useAsync(
     async () => ({
       instanceId: agentResourceInstanceId,
-      items: loadAgents ? await loadMatchAgentOptions(agentResourceInstanceId) : [],
+      revision,
+      items: loadOptions && loadAgents ? await loadMatchAgentOptions(agentResourceInstanceId) : [],
     }),
-    [loadAgents, agentResourceInstanceId],
+    [loadOptions, loadAgents, agentResourceInstanceId, revision],
   );
-  const currentAgents = agents?.instanceId === agentResourceInstanceId ? agents : null;
+  const currentAgents = agents && agents.instanceId === agentResourceInstanceId && agents.revision === revision ? agents : null;
   const agentOptions = useMemo(() => ({
     options: currentAgents?.items ?? [],
     resourceScoped: agentResourceInstanceId !== undefined,
@@ -613,6 +620,7 @@ export function MatchExprEditor({
 
   return (
     <MatchFieldsContext.Provider value={fields}>
+      <MatchOptionsContext.Provider value={directory.data?.revision === revision ? directory.data.options : {}}>
       <MatchAgentOptionsContext.Provider value={agentOptions}>
         <div className="flex flex-col gap-2">
           <select
@@ -623,6 +631,10 @@ export function MatchExprEditor({
             <option value="all">{t('policies.matchExpr.modeAll')}</option>
             <option value="custom">{t('policies.matchExpr.modeCustom')}</option>
           </select>
+
+          {loadOptions && directory.error && (
+            <div className="text-xs text-danger" role="alert">{directory.error}<button type="button" className="btn sm ml-2" onClick={() => void directory.reload()}>{t('common.refresh')}</button></div>
+          )}
 
           {model.mode === 'custom' && loadAgents && agentsError && (
             <div className="text-[11px] text-danger" role="alert">
@@ -667,6 +679,7 @@ export function MatchExprEditor({
           ) : null}
         </div>
       </MatchAgentOptionsContext.Provider>
+      </MatchOptionsContext.Provider>
     </MatchFieldsContext.Provider>
   );
 }

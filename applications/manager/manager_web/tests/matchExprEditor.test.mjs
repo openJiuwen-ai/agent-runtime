@@ -46,6 +46,7 @@ try {
     globalThis.fetch = async url => {
       const parsed = new URL(url);
       calls.push(parsed.pathname);
+      if (parsed.pathname.startsWith('/idp/')) return new Response(JSON.stringify({ items: [], total: 0, page_size: 100 }), { status: 200 });
       if (parsed.pathname.endsWith('/agent-resources')) return loadResources(parsed);
       // Return valid template choices so reverting the editor's source fails on its output.
       if (parsed.pathname.includes('/agent-templates')) {

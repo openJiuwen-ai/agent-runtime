@@ -1,0 +1,42 @@
+.wizard-identity { min-width: 0; display: flex; flex-direction: column; gap: 18px; }
+.wizard-identity__heading h2 { margin: 0; font-size: 17px; font-weight: 650; }
+.wizard-identity__heading p { margin: 7px 0 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.wizard-identity__toolbar, .wizard-identity__footer, .wizard-identity__grant-heading, .wizard-identity__row-actions, .wizard-identity__member { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.wizard-identity__toolbar, .wizard-identity__grant-heading, .wizard-identity__member { justify-content: space-between; }
+.wizard-identity__footer { justify-content: space-between; padding-top: 16px; border-top: 1px solid var(--border); }
+.wizard-identity__rows { display: flex; flex-direction: column; gap: 12px; }
+.wizard-identity__grant { border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.wizard-identity__grant-heading > div:first-child { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.wizard-identity__grant-heading small { overflow-wrap: anywhere; }
+.wizard-identity__row-actions { gap: 6px; }
+.wizard-identity__catalog-actions { display: flex; align-items: center; gap: 8px; flex: 0 1 330px; min-width: 0; max-width: 100%; }
+.wizard-identity__catalog-actions > .input { flex: 1; min-width: 0; width: 190px; }
+.wizard-identity__catalog-actions > .btn { flex-shrink: 0; }
+.wizard-identity__settings, .wizard-identity__form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.wizard-identity__settings { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.wizard-identity__check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
+.wizard-identity__note { color: var(--muted); font-size: 12px; line-height: 1.7; margin: 0; }
+.wizard-identity__empty { background: var(--secondary); border: 1px dashed var(--border); border-radius: 10px; color: var(--muted); padding: 28px 20px; font-size: 13px; line-height: 1.7; }
+.wizard-identity__error, .wizard-identity__notice { padding: 12px 14px; border-radius: 8px; font-size: 12px; line-height: 1.7; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; overflow-wrap: anywhere; }
+.wizard-identity__error { background: var(--danger-subtle); color: var(--danger); border: 1px solid var(--danger); }
+.wizard-identity__notice { background: var(--accent-subtle); color: var(--text); border: 1px solid var(--border); }
+.wizard-identity__catalog { max-height: 340px; overflow: auto; border: 1px solid var(--border); border-radius: 9px; padding: 8px 12px; }
+.wizard-identity__choice { display: flex; align-items: center; gap: 12px; padding: 12px 4px; cursor: pointer; border-bottom: 1px solid var(--border); }
+.wizard-identity__choice:last-child { border-bottom: 0; }
+.wizard-identity__choice > span { flex: 1; min-width: 0; }
+.wizard-identity__choice strong { font-size: 13px; }
+.wizard-identity__choice small, .wizard-identity__member small { display: block; font-size: 11px; color: var(--muted); margin-top: 3px; overflow-wrap: anywhere; }
+.wizard-identity__editor { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.wizard-identity__details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 24px; margin: 0; }
+.wizard-identity__details > div { min-width: 0; padding: 0 0 12px; border-bottom: 1px solid var(--border); }
+.wizard-identity__details dt { color: var(--muted); font-size: 12px; }
+.wizard-identity__details dd { margin: 7px 0 0; font-size: 13px; overflow-wrap: anywhere; }
+.wizard-identity__fieldset { border: 0; padding: 0; margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.wizard-identity__member { padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+@media (max-width: 720px) {
+  .wizard-identity__catalog-actions { flex-basis: auto; width: 100%; }
+  .wizard-identity__toolbar > .wizard-identity__row-actions { width: 100%; }
+  .wizard-identity__settings, .wizard-identity__form-grid, .wizard-identity__details { grid-template-columns: minmax(0, 1fr); }
+  .wizard-identity__footer { align-items: stretch; }
+  .wizard-identity__footer > .btn { flex: 1; }
+}

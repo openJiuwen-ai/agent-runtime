@@ -27,8 +27,9 @@ import {
 interface Props {
   open: boolean;
   template: McpTemplate | null;
+  copyFrom?: McpTemplate;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (saved: McpTemplate) => void;
 }
 
 const FIELD_MAX_LENGTH = {
@@ -130,7 +131,7 @@ function buildMcpEntry(
   return entry;
 }
 
-export function McpTemplateModal({ open, template, onClose, onSaved }: Props) {
+export function McpTemplateModal({ open, template, copyFrom, onClose, onSaved }: Props) {
   const { t } = useTranslation();
   const checkJson = useInvalidJsonChecker();
   const { markClean, isDirty } = useFormDirty(open);
@@ -139,24 +140,26 @@ export function McpTemplateModal({ open, template, onClose, onSaved }: Props) {
 
   useEffect(() => {
     if (!open) return;
-    const next: FormState = template
+    const sourceTemplate = template ?? copyFrom;
+    const next: FormState = sourceTemplate
       ? {
-          template_name: template.template_name,
-          description: template.description ?? '',
-          mcp_name: String(template.mcp_entry?.name ?? ''),
-          transport: normalizeTransport(template.mcp_entry?.transport),
-          url: String(template.mcp_entry?.url ?? ''),
-          headers: headersFromEntry(template.mcp_entry ?? { name: '', transport: '', url: '' }),
-          custom_config: customConfigFromMcpEntry(template.mcp_entry ?? { name: '', transport: '', url: '' }),
+          template_name: sourceTemplate.template_name,
+          description: sourceTemplate.description ?? '',
+          mcp_name: String(sourceTemplate.mcp_entry?.name ?? ''),
+          transport: normalizeTransport(sourceTemplate.mcp_entry?.transport),
+          url: String(sourceTemplate.mcp_entry?.url ?? ''),
+          headers: headersFromEntry(sourceTemplate.mcp_entry ?? { name: '', transport: '', url: '' }),
+          custom_config: customConfigFromMcpEntry(sourceTemplate.mcp_entry ?? { name: '', transport: '', url: '' }),
           timeout_s:
-            template.mcp_entry?.timeout_s != null && Number(template.mcp_entry.timeout_s) > 0
-              ? String(template.mcp_entry.timeout_s)
+            sourceTemplate.mcp_entry?.timeout_s != null && Number(sourceTemplate.mcp_entry.timeout_s) > 0
+              ? String(sourceTemplate.mcp_entry.timeout_s)
               : '',
         }
       : empty;
+    if (!template && copyFrom) next.template_name = `${next.template_name.slice(0, 117)} - copy`;
     setForm(next);
     markClean(next);
-  }, [open, template, markClean]);
+  }, [open, template, copyFrom, markClean]);
 
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((current) => ({ ...current, [key]: value }));
@@ -221,18 +224,19 @@ export function McpTemplateModal({ open, template, onClose, onSaved }: Props) {
     const body: McpTemplateCreateBody | McpTemplateUpdateBody = {
       template_name: form.template_name.trim(),
       description: form.description.trim() || null,
-      mcp_entry: buildMcpEntry(form, parsedHeaders, customConfig),
+      mcp_entry: {
+        ...(!template && copyFrom?.mcp_entry.enabled !== undefined ? { enabled: copyFrom.mcp_entry.enabled } : {}),
+        ...buildMcpEntry(form, parsedHeaders, customConfig),
+      },
     };
 
     setSaving(true);
     try {
-      if (template) {
-        await McpTemplateApi.update(template.template_id, body);
-      } else {
-        await McpTemplateApi.create({ ...body, enabled: true } as McpTemplateCreateBody);
-      }
+      const saved = template
+        ? await McpTemplateApi.update(template.template_id, body)
+        : await McpTemplateApi.create({ data: copyFrom?.data, ...body, enabled: true } as McpTemplateCreateBody);
       toast('success', t('success.saved'));
-      onSaved();
+      onSaved(saved);
     } catch (error) {
       toast(
         'danger',

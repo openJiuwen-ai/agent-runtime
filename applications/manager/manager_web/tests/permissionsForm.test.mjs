@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 
+globalThis.document = { documentElement: { lang: '' } };
+
 const server = await createServer({
   appType: 'custom',
   configFile: false,
-  server: { middlewareMode: true },
+  server: { middlewareMode: true, hmr: false, ws: false },
 });
 
 try {

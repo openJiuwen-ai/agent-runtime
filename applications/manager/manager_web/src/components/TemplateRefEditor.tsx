@@ -2,6 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useTranslation } from 'react-i18next';
 import { HintTooltip } from './HintTooltip';
 import { GuideLink } from './GuideLink';
+import { useEditorPresentation, useInlineEditor } from './InlineEditorContext';
+import { ReadOnlyEditorActions } from './Modal';
+import { TemplateResourceEditor } from './TemplateResourceEditor';
+import { bumpGuideRevision } from '../stores/guideStore';
 import './AgentCapabilityCards.css';
 import {
   TEMPLATE_REF_EDITOR_SLOTS,
@@ -285,6 +289,8 @@ export function TemplateRefEditor({
   onChange,
 }: TemplateRefEditorProps) {
   const { t, i18n } = useTranslation();
+  const inline = useInlineEditor();
+  const presentation = useEditorPresentation();
   const tr = (cn: string, en: string) => i18n.language.startsWith('zh') ? cn : en;
   const [editor, setEditor] = useState(() => editorValueFromMap(value));
   const extraSlotsRef = useRef<TemplateRefMap>(extraSlotsFromMap(value));
@@ -293,6 +299,7 @@ export function TemplateRefEditor({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   const [optionalOpen, setOptionalOpen] = useState(false);
+  const [resourceEditor, setResourceEditor] = useState<{ slot: TemplateRefEditorSlot; templateId?: string } | null>(null);
   useEffect(() => { if (expandOptional) setOptionalOpen(true); }, [expandOptional]);
 
   const emit = useCallback(
@@ -369,7 +376,7 @@ export function TemplateRefEditor({
     return <section key={slot} className="agent-capability-card" aria-label={title}>
       <div className="agent-capability-card__header">
         <div className="agent-capability-card__heading"><strong>{title}{isRequired ? <span className="text-danger ml-1" aria-hidden="true">*</span> : ` · ${tr('可选', 'Optional')}`}</strong><p>{slotDescription[slot]}</p></div>
-        {configPath && hintPageKey && (resourceLinksInNewTab
+        {inline ? <button type="button" className="btn sm agent-capability-card__link" onClick={() => setResourceEditor({ slot })}>+ {tr('新建', 'New')}</button> : configPath && hintPageKey && (resourceLinksInNewTab
           ? <a href={`/manager${configPath}`} target="_blank" rel="noopener noreferrer" className="btn sm agent-capability-card__link">{t('guide.gotoPageLink', { page: t(hintPageKey) })} ↗</a>
           : <HintTooltip text={t('guide.gotoPageLink', { page: t(hintPageKey) })}><GuideLink page={t(hintPageKey)} to={configPath} className="btn sm agent-capability-card__link" /></HintTooltip>)}
       </div>
@@ -380,6 +387,11 @@ export function TemplateRefEditor({
         {selected[0] && !options.some((option) => option.template_id === selected[0]) && <option value={selected[0]}>{selected[0]}</option>}
         {options.map(option => <option key={option.template_id} value={option.template_id}>{option.label}</option>)}
       </select>}
+      {inline && selected.length > 0 && <div className="mt-2 flex flex-wrap gap-2">
+        {selected.map(id => <button key={id} type="button" className="btn ghost sm" onClick={() => setResourceEditor({ slot, templateId: id })}>
+          {tr('查看详情', 'View details')}{multi ? ` · ${options.find(item => item.template_id === id)?.label ?? id}` : ''}
+        </button>)}
+      </div>}
     </section>;
   };
   const optionalCount = TEMPLATE_REF_EDITOR_SLOTS.filter(slot => !requiredSlots?.includes(slot) && value[slot]?.length).length + optionalSelectedCount;
@@ -390,7 +402,7 @@ export function TemplateRefEditor({
         <div><strong className="text-sm">{label ?? t('policies.templateRef.title')}{required && <span className="text-danger ml-0.5" aria-hidden="true">*</span>}</strong>{hint && <p className="text-xs text-muted mt-1">{hint}</p>}</div>
         <button type="button" className="btn sm" disabled={loadingTemplates} onClick={() => setRevision(v => v + 1)}>{t('common.refresh')}</button>
       </div>
-      {resourceLinksInNewTab && <p className="text-xs text-muted">{t('agentTemplate.resourceTabHint')}</p>}
+      {resourceLinksInNewTab && !inline && <p className="text-xs text-muted">{t('agentTemplate.resourceTabHint')}</p>}
       {loadError && <div role="alert" className="text-danger text-sm">{t('errors.loadFailed', { detail: loadError })}</div>}
       {loadingTemplates && <div className="text-xs text-muted">{t('policies.templateRef.loadingTemplates')}</div>}
       {(collapseOptional ? TEMPLATE_REF_EDITOR_SLOTS.filter(slot => requiredSlots?.includes(slot)) : TEMPLATE_REF_EDITOR_SLOTS).map(renderSlot)}
@@ -404,6 +416,22 @@ export function TemplateRefEditor({
           {optionalContent}
         </div>
       </> : optionalContent}
+      {inline && presentation.readOnly && <ReadOnlyEditorActions>
+        {TEMPLATE_REF_EDITOR_SLOTS.filter(slot => editor[slot]?.length).map(slot => <div key={slot} className="inline-editor-linked-resources">
+          <strong>{t(`policies.templateRef.slots.${slot}`, { defaultValue: slot })}</strong>
+          {(editor[slot] ?? []).map(id => <button type="button" className="btn sm" key={id} onClick={() => setResourceEditor({ slot, templateId: id })}>{tr('查看详情', 'View details')} · {templateOptions[slot]?.find(item => item.template_id === id)?.label ?? id}</button>)}
+        </div>)}
+      </ReadOnlyEditorActions>}
+      {resourceEditor && <TemplateResourceEditor key={`${resourceEditor.slot}:${resourceEditor.templateId ?? 'new'}`} {...resourceEditor}
+        onClose={() => setResourceEditor(null)}
+        onSaved={(id, name) => {
+          const slot = resourceEditor.slot;
+          setTemplateOptions(current => ({ ...current, [slot]: [...(current[slot] ?? []).filter(item => item.template_id !== id), { template_id: id, label: `${name} (${id})` }] }));
+          setSlotIds(slot, isMultiValueTemplateRefSlot(slot) ? [...new Set([...(editor[slot] ?? []), id])] : [id]);
+          setResourceEditor(null);
+          setRevision(current => current + 1);
+          bumpGuideRevision();
+        }} />}
     </div>
   );
 }

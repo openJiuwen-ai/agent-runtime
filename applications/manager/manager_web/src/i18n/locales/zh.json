@@ -2026,6 +2026,8 @@
     "authorizationNoteText": "用户或组织是“谁”，角色是“能做什么”，服务实例是“在哪个集群生效”。先准备身份和角色，再到服务实例中配置集群准入及 Agent 使用范围。",
     "authorizationNoteAction": "去配置服务实例 →",
     "workbench": {
+      "guidedSetupHint": "需要逐步指导时，可进入配置向导；下方仍可直接修改各项配置。",
+      "continueGuidedSetup": "继续配置向导",
       "loading": "正在读取集群配置…",
       "loadFailed": "无法读取集群配置",
       "retry": "重试",

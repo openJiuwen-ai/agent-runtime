@@ -6,7 +6,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
-import { Modal, ModalCancelButton } from '../../components/Modal';
+import { Modal, ModalCancelButton, ReadOnlyEditorActions } from '../../components/Modal';
+import { EditorPresentationProvider, useEditorPresentation, useInlineEditor } from '../../components/InlineEditorContext';
 import { useFormDirty } from '../../hooks/useFormDirty';
 import { ContainerTemplateApi, ServiceConfigTemplateApi, ApiError, type DeploymentDefaultsPreview, type DeploymentDefaultPreviewItem } from '../../services/api';
 import { toast } from '../../stores/uiStore';
@@ -69,11 +70,15 @@ function ContainerBindingSelect({
   templates,
   value,
   onChange,
+  onView,
+  onCreate,
 }: {
   label: string;
   templates: ServiceConfigContainerBrief[];
   value: string;
   onChange: (containerId: string) => void;
+  onView?: () => void;
+  onCreate?: () => void;
 }) {
   const { t } = useTranslation();
   const selected = templates.find((tpl) => tpl.container_id === value);
@@ -87,6 +92,10 @@ function ContainerBindingSelect({
           </option>
         ))}
       </select>
+      {(onView || onCreate) && <div className="mt-2 flex flex-wrap gap-2">
+        {onView && selected && <button type="button" className="btn ghost sm" onClick={onView}>{t('common.view', { defaultValue: '查看详情' })}</button>}
+        {onCreate && <button type="button" className="btn sm" onClick={onCreate}>+ {t('containerTemplate.new')}</button>}
+      </div>}
       {selected && (
         <div className="runtime-template-binding__summary">
           <div className="flex flex-wrap gap-x-6 gap-y-1">
@@ -109,12 +118,16 @@ interface Props {
   open: boolean;
   /** 编辑目标；null = 新建 */
   template: ServiceConfigTemplate | null;
+  copyFrom?: ServiceConfigTemplate;
   onClose: () => void;
   onSaved: (saved: ServiceConfigTemplate) => void;
 }
 
-export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }: Props) {
-  const { t } = useTranslation();
+export function ServiceConfigTemplateModal({ open, template, copyFrom, onClose, onSaved }: Props) {
+  const { t, i18n } = useTranslation();
+  const inline = useInlineEditor();
+  const presentation = useEditorPresentation();
+  const tr = (cn: string, en: string) => i18n.language.startsWith('zh') ? cn : en;
   const { markClean, isDirty } = useFormDirty(open);
   const [form, setForm] = useState<FormState>(() => runtimeTemplateForm());
   const [saving, setSaving] = useState(false);
@@ -131,6 +144,29 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
   const [defaultContainers, setDefaultContainers] = useState<ServiceConfigContainerBrief[]>([]);
   const containerOptions = [...defaultContainers, ...catalogContainers.filter(item => !defaultContainers.some(draft => draft.container_id === item.container_id))];
   const [containerModalOpen, setContainerModalOpen] = useState(false);
+  const [containerSource, setContainerSource] = useState<ContainerTemplate | null>(null);
+  const [containerMode, setContainerMode] = useState<'create' | 'view' | 'copy'>('create');
+  const [containerTarget, setContainerTarget] = useState<number | null>(null);
+
+  const createContainer = (target: number | null = null) => {
+    setContainerSource(null);
+    setContainerTarget(target);
+    setContainerMode('create');
+    setContainerModalOpen(true);
+  };
+  const viewContainer = async (containerId: string, target: number | null = null) => {
+    const selected = containerOptions.find(item => item.container_id === containerId);
+    if (!selected?.template_id) return;
+    try {
+      const source = await ContainerTemplateApi.get(selected.template_id);
+      setContainerSource(source);
+      setContainerTarget(target);
+      setContainerMode('view');
+      setContainerModalOpen(true);
+    } catch (failure) {
+      toast('danger', t('errors.loadFailed', { detail: failure instanceof ApiError ? failure.detail : (failure as Error).message }));
+    }
+  };
 
   useEffect(() => { if (!open) setContainerModalOpen(false); }, [open]);
 
@@ -159,12 +195,14 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
     setDefaultContainers([]);
     setPendingDefault(null);
     if (!open) return;
-    const next = runtimeTemplateForm(template ?? undefined);
+    const sourceTemplate = template ?? copyFrom;
+    const next = runtimeTemplateForm(sourceTemplate);
+    if (!template && copyFrom) next.template_name = `${next.template_name.slice(0, 117)} - copy`;
     setForm(next);
-    setTemplateData(runtimeTemplateData(template?.data));
+    setTemplateData(runtimeTemplateData(sourceTemplate?.data));
     markClean(next);
     return () => { requestVersion.current += 1; };
-  }, [open, template, markClean]);
+  }, [open, template, copyFrom, markClean]);
 
   const applyDefault = (item: DeploymentDefaultPreviewItem, fingerprint: string) => {
     setForm(runtimeTemplateForm(item.template));
@@ -362,9 +400,9 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
                 <GroupLabel hint={t('serviceConfigTemplate.containerSetupHint')}>
                   {t('serviceConfigTemplate.containerSetup')}
                 </GroupLabel>
-                <button type="button" className="btn sm" onClick={() => setContainerModalOpen(true)}>
+                {!inline && <button type="button" className="btn sm" onClick={() => createContainer()}>
                   + {t('containerTemplate.new')}
-                </button>
+                </button>}
               </div>
               <div className="runtime-template-field">
                 <FieldLabel required>{t('serviceConfigTemplate.mainContainerBinding')}</FieldLabel>
@@ -373,6 +411,8 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
                   templates={containerOptions}
                   value={form.main_container_id}
                   onChange={(containerId) => update('main_container_id', containerId)}
+                  onView={inline && catalogContainers.some(item => item.container_id === form.main_container_id) ? () => void viewContainer(form.main_container_id) : undefined}
+                  onCreate={inline ? () => createContainer() : undefined}
                 />
                 {form.main_container_id && !containerOptions.some((tpl) => tpl.container_id === form.main_container_id) && (
                   <p className="runtime-template-field__hint text-warning">
@@ -397,6 +437,8 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
                           templates={containerOptions}
                           value={id}
                           onChange={(containerId) => update('sidecar_ids', form.sidecar_ids.map((v, i) => i === index ? containerId : v))}
+                          onView={inline && catalogContainers.some(item => item.container_id === id) ? () => void viewContainer(id, index) : undefined}
+                          onCreate={inline ? () => createContainer(index) : undefined}
                         />
                         {id && !containerOptions.some((tpl) => tpl.container_id === id) && (
                           <p className="runtime-template-field__hint text-warning">{t('serviceConfigTemplate.bindingNotFoundWarn', { id })}</p>
@@ -486,19 +528,32 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
               </div>
             </details>
           </fieldset>
+          {inline && presentation.readOnly && <ReadOnlyEditorActions>
+            {[form.main_container_id, ...form.sidecar_ids].filter((id, index, ids) => id && ids.indexOf(id) === index).map(id => <div className="inline-editor-linked-resources" key={id}>
+              <strong>{id === form.main_container_id ? t('serviceConfigTemplate.mainContainerBinding') : t('serviceConfigTemplate.sidecarContainerBinding')}</strong>
+              <button type="button" className="btn sm" disabled={!catalogContainers.some(item => item.container_id === id)} onClick={() => void viewContainer(id)}>{tr('查看容器详情', 'View container details')} · {containerOptions.find(item => item.container_id === id)?.template_name ?? id}</button>
+            </div>)}
+          </ReadOnlyEditorActions>}
         </div>
       </Modal>
+      <EditorPresentationProvider readOnly={containerMode === 'view'} footer={containerMode === 'view' ? <>
+        <ModalCancelButton>{tr('返回运行时模板', 'Back to runtime template')}</ModalCancelButton>
+        {!presentation.readOnly && <button type="button" className="btn primary" onClick={() => setContainerMode('copy')}>{tr('复制并自定义', 'Copy and customize')}</button>}
+      </> : undefined}>
       <ContainerTemplateModal
         open={open && containerModalOpen}
-        template={null}
+        template={containerMode === 'view' ? containerSource : null}
+        copyFrom={containerMode === 'copy' ? containerSource ?? undefined : undefined}
         onClose={() => setContainerModalOpen(false)}
         onSaved={(saved) => {
           setCatalogContainers((current) => [...current.filter((item) => item.template_id !== saved.template_id), saved]);
-          if (!form.main_container_id) update('main_container_id', saved.container_id);
+          if (containerTarget === null) update('main_container_id', saved.container_id);
+          else update('sidecar_ids', form.sidecar_ids.map((value, index) => index === containerTarget ? saved.container_id : value));
           setContainerModalOpen(false);
           bumpGuideRevision();
         }}
       />
+      </EditorPresentationProvider>
     </>
   );
 }

@@ -21,8 +21,9 @@ import type {
 interface Props {
   open: boolean;
   template: ModelTemplate | null;
+  copyFrom?: ModelTemplate;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (saved: ModelTemplate) => void;
 }
 
 const MODEL_TYPE_OPTIONS = ['default', 'video', 'audio', 'vision', 'image_gen'] as const;
@@ -141,7 +142,7 @@ function buildTemplateData(
   return Object.keys(data).length > 0 ? data : null;
 }
 
-export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) {
+export function ModelTemplateModal({ open, template, copyFrom, onClose, onSaved }: Props) {
   const { t } = useTranslation();
   const checkJson = useInvalidJsonChecker();
   const { markClean, isDirty } = useFormDirty(open);
@@ -152,28 +153,30 @@ export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) 
 
   useEffect(() => {
     if (!open) return;
-    const next: FormState = template
+    const sourceTemplate = template ?? copyFrom;
+    const next: FormState = sourceTemplate
       ? {
-          template_name: clipField(template.template_name, FIELD_MAX_LENGTH.template_name),
-          description: clipField(template.description ?? '', FIELD_MAX_LENGTH.description),
-          model_type: template.model_type ?? [],
-          api_base: clipField(template.api_base, FIELD_MAX_LENGTH.api_base),
-          api_key: clipField(template.api_key, FIELD_MAX_LENGTH.api_key),
-          model_id: clipField(template.model_id, FIELD_MAX_LENGTH.model_id),
+          template_name: clipField(sourceTemplate.template_name, FIELD_MAX_LENGTH.template_name),
+          description: clipField(sourceTemplate.description ?? '', FIELD_MAX_LENGTH.description),
+          model_type: sourceTemplate.model_type ?? [],
+          api_base: clipField(sourceTemplate.api_base, FIELD_MAX_LENGTH.api_base),
+          api_key: clipField(sourceTemplate.api_key, FIELD_MAX_LENGTH.api_key),
+          model_id: clipField(sourceTemplate.model_id, FIELD_MAX_LENGTH.model_id),
           model_provider: clipField(
-            normalizeModelProvider(template.model_provider),
+            normalizeModelProvider(sourceTemplate.model_provider),
             FIELD_MAX_LENGTH.model_provider,
           ),
-          parameters: safeStringify(template.parameters ?? {}, 2),
-          timeout: template.timeout,
-          verify_ssl: template.verify_ssl,
-          headers: headersFromData(template.data),
+          parameters: safeStringify(sourceTemplate.parameters ?? {}, 2),
+          timeout: sourceTemplate.timeout,
+          verify_ssl: sourceTemplate.verify_ssl,
+          headers: headersFromData(sourceTemplate.data),
         }
       : empty;
+    if (!template && copyFrom) next.template_name = `${next.template_name.slice(0, 117)} - copy`;
     setForm(next);
     markClean(next);
     setTypeOpen(false);
-  }, [open, template, markClean]);
+  }, [open, template, copyFrom, markClean]);
 
   useEffect(() => {
     if (!typeOpen) return;
@@ -259,7 +262,7 @@ export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) 
       timeout: form.timeout,
       verify_ssl: form.verify_ssl,
     };
-    const nextData = buildTemplateData(template?.data, parsedHeaders);
+    const nextData = buildTemplateData((template ?? copyFrom)?.data, parsedHeaders);
     if (template) {
       body.data = nextData ?? {};
     } else if (nextData) {
@@ -268,13 +271,11 @@ export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) 
 
     setSaving(true);
     try {
-      if (template) {
-        await ModelTemplateApi.update(template.template_id, body);
-      } else {
-        await ModelTemplateApi.create({ ...body, enabled: true } as ModelTemplateCreateBody);
-      }
+      const saved = template
+        ? await ModelTemplateApi.update(template.template_id, body)
+        : await ModelTemplateApi.create({ ...body, enabled: true } as ModelTemplateCreateBody);
       toast('success', t('success.saved'));
-      onSaved();
+      onSaved(saved);
     } catch (e) {
       toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
     } finally {

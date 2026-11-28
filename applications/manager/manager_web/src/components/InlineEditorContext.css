@@ -1,0 +1,16 @@
+.inline-editor-stage:empty { display: none; }
+.inline-editor-panel { width: 100%; min-width: 0; overflow: hidden; background: var(--card); border: 1px solid var(--border); border-radius: 12px; }
+.inline-editor-panel[hidden] { display: none; }
+.inline-editor-panel .modal-header { gap: 16px; }
+.inline-editor-panel .modal-body { max-height: none; overflow: visible; }
+.inline-editor-panel .modal-footer { position: sticky; bottom: 0; background: var(--card); z-index: 2; }
+.inline-editor-fields { margin: 0; padding: 0; min-width: 0; border: 0; }
+.inline-editor-fields:disabled { opacity: 1; }
+.inline-editor-readonly-actions:empty { display: none; }
+.inline-editor-readonly-actions { display: grid; gap: 10px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+.inline-editor-linked-resources { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width: 0; }
+.inline-editor-linked-resources > strong { font-size: 12px; color: var(--muted); }
+.inline-editor-linked-resources > .btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: left; }
+.inline-editor-confirm { padding: 16px 24px; border-top: 1px solid var(--warn); background: var(--warn-subtle); }
+.inline-editor-confirm p { margin: 0 0 12px; }
+.inline-editor-confirm__actions { display: flex; justify-content: flex-end; gap: 8px; }

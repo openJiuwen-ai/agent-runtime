@@ -29,9 +29,10 @@ import { LimitedTextInput } from '../../components/LimitedTextInput';
 interface Props {
   open: boolean;
   template: SkillPrebuiltTemplate | null;
+  copyFrom?: SkillPrebuiltTemplate;
   onClose: () => void;
   /** created=true 表示新建成功，便于父级展示「去 Agent 模板引用」引导 */
-  onSaved: (result: { created: boolean }) => void;
+  onSaved: (saved: SkillPrebuiltTemplate & { created: boolean }) => void;
 }
 
 /** 与 skill_prebuilt_template 表 ColumnDefinition length 一致 */
@@ -356,7 +357,7 @@ function SourceCombobox({
   );
 }
 
-export function SkillPrebuiltTemplateModal({ open, template, onClose, onSaved }: Props) {
+export function SkillPrebuiltTemplateModal({ open, template, copyFrom, onClose, onSaved }: Props) {
   const { t } = useTranslation();
   const { markClean, isDirty } = useFormDirty(open);
   const [form, setForm] = useState<FormState>(empty);
@@ -369,22 +370,24 @@ export function SkillPrebuiltTemplateModal({ open, template, onClose, onSaved }:
 
   useEffect(() => {
     if (!open) return;
-    const packageUrl = template?.package_url || '';
-    const next: FormState = template
+    const sourceTemplate = template ?? copyFrom ?? null;
+    const packageUrl = sourceTemplate?.package_url || '';
+    const next: FormState = sourceTemplate
       ? {
-          installMode: resolveInstallMode(template),
-          template_name: clipField(template.template_name, FIELD_MAX_LENGTH.template_name),
-          description: clipField(template.description ?? '', FIELD_MAX_LENGTH.description),
-          skill_id: clipField(template.skill_id, FIELD_MAX_LENGTH.skill_id),
+          installMode: resolveInstallMode(sourceTemplate),
+          template_name: clipField(sourceTemplate.template_name, FIELD_MAX_LENGTH.template_name),
+          description: clipField(sourceTemplate.description ?? '', FIELD_MAX_LENGTH.description),
+          skill_id: clipField(sourceTemplate.skill_id, FIELD_MAX_LENGTH.skill_id),
           package_url: clipField(packageUrl, FIELD_MAX_LENGTH.package_url),
-          source_id: clipField(template.source_id ?? '', FIELD_MAX_LENGTH.source_id),
-          version_id: clipField(template.version_id ?? '', FIELD_MAX_LENGTH.version_id),
-          sha256: clipField(readDataString(template.data ?? undefined, 'sha256'), 64),
+          source_id: clipField(sourceTemplate.source_id ?? '', FIELD_MAX_LENGTH.source_id),
+          version_id: clipField(sourceTemplate.version_id ?? '', FIELD_MAX_LENGTH.version_id),
+          sha256: clipField(readDataString(sourceTemplate.data ?? undefined, 'sha256'), 64),
         }
       : {
           ...empty,
           source_id: BUILTIN_SOURCE_ID,
         };
+    if (!template && copyFrom) next.template_name = `${next.template_name.slice(0, 117)} - copy`;
     initialInstallModeRef.current = next.installMode;
     setForm(next);
     markClean(next);
@@ -399,7 +402,7 @@ export function SkillPrebuiltTemplateModal({ open, template, onClose, onSaved }:
     return () => {
       cancelled = true;
     };
-  }, [open, template, markClean]);
+  }, [open, template, copyFrom, markClean]);
 
   const update = <K extends keyof FormState>(k: K, v: FormState[K]) =>
     setForm((s) => ({ ...s, [k]: v }));
@@ -425,7 +428,7 @@ export function SkillPrebuiltTemplateModal({ open, template, onClose, onSaved }:
     }
 
     const provider = form.installMode === 'spi';
-    const modeSwitched = Boolean(template) && form.installMode !== initialInstallModeRef.current;
+    const modeSwitched = Boolean(template ?? copyFrom) && form.installMode !== initialInstallModeRef.current;
     const sourceId = form.source_id.trim();
     const versionId = form.version_id.trim();
     const packageUrl = form.package_url.trim();
@@ -476,15 +479,16 @@ export function SkillPrebuiltTemplateModal({ open, template, onClose, onSaved }:
     const description = form.description.trim() || null;
     // 未切换安装方式时保留另一侧历史字段（含 data.sha256），避免双字段旧数据被静默清掉
     const data = buildTemplateData(
-      template?.data ?? undefined,
+      (template ?? copyFrom)?.data ?? undefined,
       sha,
       provider,
-      Boolean(template) && !modeSwitched,
+      Boolean(template ?? copyFrom) && !modeSwitched,
     );
     const created = !template;
 
     setSaving(true);
     try {
+      let saved: SkillPrebuiltTemplate;
       if (template) {
         const patch: SkillPrebuiltTemplateUpdateBody = {
           template_name: form.template_name.trim(),
@@ -507,22 +511,22 @@ export function SkillPrebuiltTemplateModal({ open, template, onClose, onSaved }:
             patch.version_id = '';
           }
         }
-        await SkillPrebuiltTemplateApi.update(template.template_id, patch);
+        saved = await SkillPrebuiltTemplateApi.update(template.template_id, patch);
         toast('success', t('success.saved'));
       } else {
-        await SkillPrebuiltTemplateApi.create({
+        saved = await SkillPrebuiltTemplateApi.create({
           template_name: form.template_name.trim(),
           description,
           skill_id: form.skill_id.trim(),
-          package_url: provider ? undefined : packageUrl || undefined,
-          source_id: provider ? sourceId || undefined : undefined,
-          version_id: provider ? versionId || undefined : undefined,
+          package_url: provider ? !modeSwitched ? copyFrom?.package_url ?? undefined : undefined : packageUrl || undefined,
+          source_id: provider ? sourceId || undefined : !modeSwitched ? copyFrom?.source_id ?? undefined : undefined,
+          version_id: provider ? versionId || undefined : !modeSwitched ? copyFrom?.version_id ?? undefined : undefined,
           enabled: true,
           data,
         });
         toast('success', t('skillWhitelistTemplate.savedNeedBind'));
       }
-      onSaved({ created });
+      onSaved({ ...saved, created });
     } catch (e) {
       toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
     } finally {

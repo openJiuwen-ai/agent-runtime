@@ -25,8 +25,9 @@ import {
 interface Props {
   open: boolean;
   template: ExecutionGuardTemplate | null;
+  copyFrom?: ExecutionGuardTemplate;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (saved: ExecutionGuardTemplate) => void;
 }
 
 const FIELD_MAX_LENGTH = {
@@ -72,7 +73,7 @@ function NumberField({
   );
 }
 
-export function ExecutionGuardrailsModal({ open, template, onClose, onSaved }: Props) {
+export function ExecutionGuardrailsModal({ open, template, copyFrom, onClose, onSaved }: Props) {
   const { t } = useTranslation();
   const { markClean, isDirty } = useFormDirty(open);
   const [templateName, setTemplateName] = useState('');
@@ -82,20 +83,22 @@ export function ExecutionGuardrailsModal({ open, template, onClose, onSaved }: P
 
   useEffect(() => {
     if (!open) return;
-    const nextName = template
-      ? clipField(template.template_name, FIELD_MAX_LENGTH.template_name)
+    const sourceTemplate = template ?? copyFrom;
+    const sourceName = sourceTemplate
+      ? clipField(sourceTemplate.template_name, FIELD_MAX_LENGTH.template_name)
       : '';
-    const nextDesc = template
-      ? clipField(template.description ?? '', FIELD_MAX_LENGTH.description)
+    const nextDesc = sourceTemplate
+      ? clipField(sourceTemplate.description ?? '', FIELD_MAX_LENGTH.description)
       : '';
-    const nextForm = template
-      ? executionGuardBodyToFormState(template.body ?? {})
+    const nextForm = sourceTemplate
+      ? executionGuardBodyToFormState(sourceTemplate.body ?? {})
       : createDefaultExecutionGuardFormState();
+    const nextName = !template && copyFrom ? `${sourceName.slice(0, 117)} - copy` : sourceName;
     setTemplateName(nextName);
     setDescription(nextDesc);
     setForm(nextForm);
     markClean({ templateName: nextName, description: nextDesc, form: nextForm });
-  }, [open, template, markClean]);
+  }, [open, template, copyFrom, markClean]);
 
   const update = <K extends keyof ExecutionGuardFormState>(key: K, value: ExecutionGuardFormState[K]) => {
     setForm((current) => ({ ...current, [key]: value }));
@@ -139,21 +142,41 @@ export function ExecutionGuardrailsModal({ open, template, onClose, onSaved }: P
       return;
     }
 
+    let guardBody = executionGuardFormStateToBody(form);
+    if (!template && copyFrom) {
+      const baseline = executionGuardFormStateToBody(executionGuardBodyToFormState(copyFrom.body));
+      const mergeEdits = (
+        original: Record<string, unknown>,
+        normalized: Record<string, unknown>,
+        edited: Record<string, unknown>,
+      ): Record<string, unknown> => {
+        const result = { ...original };
+        for (const [key, value] of Object.entries(edited)) {
+          if (JSON.stringify(value) === JSON.stringify(normalized[key])) continue;
+          const previous = normalized[key];
+          const source = original[key];
+          if (value && previous && source && typeof value === 'object' && typeof previous === 'object'
+            && typeof source === 'object' && !Array.isArray(value) && !Array.isArray(previous) && !Array.isArray(source)) {
+            result[key] = mergeEdits(source as Record<string, unknown>, previous as Record<string, unknown>, value as Record<string, unknown>);
+          } else result[key] = value;
+        }
+        return result;
+      };
+      guardBody = mergeEdits(copyFrom.body, baseline, guardBody);
+    }
     const body: ExecutionGuardTemplateCreateBody | ExecutionGuardTemplateUpdateBody = {
       template_name: templateName.trim(),
       description: description.trim() || null,
-      body: executionGuardFormStateToBody(form),
+      body: guardBody,
     };
 
     setSaving(true);
     try {
-      if (template) {
-        await ExecutionGuardTemplateApi.update(template.template_id, body);
-      } else {
-        await ExecutionGuardTemplateApi.create({ ...body, enabled: true } as ExecutionGuardTemplateCreateBody);
-      }
+      const saved = template
+        ? await ExecutionGuardTemplateApi.update(template.template_id, body)
+        : await ExecutionGuardTemplateApi.create({ data: copyFrom?.data ?? undefined, ...body, enabled: true } as ExecutionGuardTemplateCreateBody);
       toast('success', t('success.saved'));
-      onSaved();
+      onSaved(saved);
     } catch (e) {
       toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
     } finally {

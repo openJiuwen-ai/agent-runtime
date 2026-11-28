@@ -20,8 +20,9 @@ import type {
 interface Props {
   open: boolean;
   template: ExtensionConfigTemplate | null;
+  copyFrom?: ExtensionConfigTemplate;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (saved: ExtensionConfigTemplate) => void;
 }
 
 interface FormState {
@@ -100,7 +101,7 @@ function buildHookConfig(form: FormState): HookConfig {
   return config;
 }
 
-export function ExtensionTemplateModal({ open, template, onClose, onSaved }: Props) {
+export function ExtensionTemplateModal({ open, template, copyFrom, onClose, onSaved }: Props) {
   const { t } = useTranslation();
   const checkJson = useInvalidJsonChecker();
   const { markClean, isDirty } = useFormDirty(open);
@@ -109,19 +110,21 @@ export function ExtensionTemplateModal({ open, template, onClose, onSaved }: Pro
 
   useEffect(() => {
     if (!open) return;
-    const next: FormState = template
+    const sourceTemplate = template ?? copyFrom;
+    const next: FormState = sourceTemplate
       ? {
-          template_name: clipField(template.template_name, FIELD_MAX_LENGTH.template_name),
-          description: clipField(template.description ?? '', FIELD_MAX_LENGTH.description),
-          component: clipField(template.component, FIELD_MAX_LENGTH.component),
-          hook_type: clipField(template.hook_type, FIELD_MAX_LENGTH.hook_type),
-          ...hookConfigToForm(template.hook_config),
-          custom_config: safeStringify(template.custom_config ?? {}, 2),
+          template_name: clipField(sourceTemplate.template_name, FIELD_MAX_LENGTH.template_name),
+          description: clipField(sourceTemplate.description ?? '', FIELD_MAX_LENGTH.description),
+          component: clipField(sourceTemplate.component, FIELD_MAX_LENGTH.component),
+          hook_type: clipField(sourceTemplate.hook_type, FIELD_MAX_LENGTH.hook_type),
+          ...hookConfigToForm(sourceTemplate.hook_config),
+          custom_config: safeStringify(sourceTemplate.custom_config ?? {}, 2),
         }
       : empty;
+    if (!template && copyFrom) next.template_name = `${next.template_name.slice(0, 117)} - copy`;
     setForm(next);
     markClean(next);
-  }, [open, template, markClean]);
+  }, [open, template, copyFrom, markClean]);
 
   const update = <K extends keyof FormState>(k: K, v: FormState[K]) =>
     setForm((s) => ({ ...s, [k]: v }));
@@ -178,7 +181,10 @@ export function ExtensionTemplateModal({ open, template, onClose, onSaved }: Pro
       description: form.description.trim() || null,
       component: form.component.trim(),
       hook_type: form.hook_type.trim(),
-      hook_config: buildHookConfig(form),
+      hook_config: {
+        ...(!template && copyFrom ? Object.fromEntries(Object.entries(copyFrom.hook_config).filter(([key]) => !['handler', 'params', 'schedule', 'data'].includes(key))) : {}),
+        ...buildHookConfig(form),
+      },
       custom_config: form.custom_config.trim()
         ? (tryParseJson(form.custom_config, {}) as Record<string, unknown>)
         : undefined,
@@ -186,13 +192,11 @@ export function ExtensionTemplateModal({ open, template, onClose, onSaved }: Pro
 
     setSaving(true);
     try {
-      if (template) {
-        await ExtensionTemplateApi.update(template.template_id, body);
-      } else {
-        await ExtensionTemplateApi.create({ ...body, enabled: true } as ExtensionConfigTemplateCreateBody);
-      }
+      const saved = template
+        ? await ExtensionTemplateApi.update(template.template_id, body)
+        : await ExtensionTemplateApi.create({ data: copyFrom?.data, ...body, enabled: true } as ExtensionConfigTemplateCreateBody);
       toast('success', t('success.saved'));
-      onSaved();
+      onSaved(saved);
     } catch (e) {
       toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
     } finally {
