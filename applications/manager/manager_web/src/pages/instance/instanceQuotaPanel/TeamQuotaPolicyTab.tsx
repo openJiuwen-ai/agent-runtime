@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../../auth/AuthContext';
-import { ApiError, hasPermission, TeamQuotaApi } from '../../../services/api';
+import { hasPermission, TeamQuotaApi } from '../../../services/api';
 import { useAsync } from '../../../hooks/useAsync';
 import { useFormDirty } from '../../../hooks/useFormDirty';
 import type { TeamQuotaPolicy, WorkspaceQuotaMatchExpr } from '../../../types';
@@ -16,6 +16,7 @@ import { toast } from '../../../stores/uiStore';
 import { formatTime } from '../../../utils/format';
 import { INT32_MAX, isNonNegInt32 } from '../../../utils/intBounds';
 import { matchExprToEditorString } from '../../../utils/matchExpr';
+import { quotaErrorMessage } from '../../../utils/quotaError';
 
 const FIELD_MAX_LENGTH = {
   policy_name: 128,
@@ -46,25 +47,6 @@ function editorToMatchExpr(value: string): WorkspaceQuotaMatchExpr {
     }
   }
   return text;
-}
-
-/** 把后端错误转成已本地化的 toast 文案：422/5xx 走中文兜底，避免中英混合（issue #200）。
- *  字段级中文提示由行内校验给出，toast 只负责通用兜底；400 业务错误保留 detail。 */
-function quotaErrorMessage(
-  e: unknown,
-  t: (key: string, opts?: Record<string, unknown>) => string,
-  mode: 'save' | 'delete' = 'save',
-): string {
-  if (e instanceof ApiError) {
-    if (e.status >= 500) {
-      return t(mode === 'delete' ? 'errors.upstreamDeleteFailed' : 'errors.upstreamSyncFailed');
-    }
-    if (e.status === 422) {
-      return t('errors.validationFailed');
-    }
-    return e.detail || e.message;
-  }
-  return (e as Error).message;
 }
 
 interface FormState {
