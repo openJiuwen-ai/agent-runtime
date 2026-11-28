@@ -96,7 +96,9 @@ async def test_http_request_runtime_4xx_raises_clean_message(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
-async def test_http_request_gateway_4xx_keeps_transport_wrapper(monkeypatch) -> None:
+async def test_http_request_gateway_4xx_passes_through_detail(monkeypatch) -> None:
+    # issue #200：Gateway 4xx（含 Pydantic 422 / 业务 400）应直接透传 detail，
+    # 不再包成 "gateway HTTP push rejected status=400 detail='...'"，让可读文案直达用户。
     class _FakeClient:
         def __init__(self, *args, **kwargs):
             pass
@@ -142,5 +144,5 @@ async def test_http_request_gateway_4xx_keeps_transport_wrapper(monkeypatch) -> 
             {},
             endpoint="http://gateway.example",
         )
-    assert "gateway HTTP push rejected status=400" in str(exc.value)
-    assert "bad gateway payload" in str(exc.value)
+    assert str(exc.value) == "bad gateway payload"
+    assert "HTTP push rejected" not in str(exc.value)

@@ -48,6 +48,25 @@ function editorToMatchExpr(value: string): WorkspaceQuotaMatchExpr {
   return text;
 }
 
+/** 把后端错误转成已本地化的 toast 文案：422/5xx 走中文兜底，避免中英混合（issue #200）。
+ *  字段级中文提示由行内校验给出，toast 只负责通用兜底；400 业务错误保留 detail。 */
+function quotaErrorMessage(
+  e: unknown,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+  mode: 'save' | 'delete' = 'save',
+): string {
+  if (e instanceof ApiError) {
+    if (e.status >= 500) {
+      return t(mode === 'delete' ? 'errors.upstreamDeleteFailed' : 'errors.upstreamSyncFailed');
+    }
+    if (e.status === 422) {
+      return t('errors.validationFailed');
+    }
+    return e.detail || e.message;
+  }
+  return (e as Error).message;
+}
+
 interface FormState {
   policyName: string;
   policyDesc: string;
@@ -163,7 +182,7 @@ export function TeamQuotaPolicyTab({ instanceId, onChange }: { instanceId: strin
       await reload();
       onChange?.();
     } catch (e) {
-      toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+      toast('danger', quotaErrorMessage(e, t, 'save'));
     } finally {
       setSaving(false);
     }
@@ -177,7 +196,7 @@ export function TeamQuotaPolicyTab({ instanceId, onChange }: { instanceId: strin
       await reload();
       onChange?.();
     } catch (e) {
-      toast('danger', t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+      toast('danger', quotaErrorMessage(e, t, 'delete'));
     }
   };
 
@@ -281,9 +300,7 @@ export function TeamQuotaPolicyTab({ instanceId, onChange }: { instanceId: strin
                                 await reload();
                                 onChange?.();
                               }).catch((e) => {
-                                toast('danger', t('errors.saveFailed', {
-                                  detail: e instanceof ApiError ? e.detail : (e as Error).message,
-                                }));
+                                toast('danger', quotaErrorMessage(e, t, 'save'));
                               });
                             }}
                           />

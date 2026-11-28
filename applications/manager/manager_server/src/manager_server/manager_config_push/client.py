@@ -138,9 +138,11 @@ async def http_request(
 
     if resp.status_code >= 400:
         detail = _reject_detail(resp)
-        # Runtime 校验类 4xx：直接透传 error_message，不再包成
-        # "HTTP push rejected … detail='{整段 JSON}'"（P0：去掉传输层噪音）。
-        if role == "runtime" and 400 <= resp.status_code < 500 and detail:
+        # Runtime / Gateway 校验类 4xx：直接透传 error_message/detail，不再包成
+        # "HTTP push rejected … detail='{整段 JSON}'"（P0：去掉传输层噪音，issue #200）。
+        # 让上游 Pydantic 422 / ValueError 400 的可读文案直达用户，避免被
+        # "gateway HTTP push rejected status=… detail='…'" 包成英文模板。
+        if 400 <= resp.status_code < 500 and detail:
             raise ValueError(detail)
         raise ValueError(
             f"{role} HTTP push rejected status={resp.status_code} detail={detail!r}"
