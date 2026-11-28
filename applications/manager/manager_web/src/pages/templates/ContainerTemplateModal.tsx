@@ -14,13 +14,15 @@ import './ContainerTemplateModal.css';
 interface Props {
   open: boolean;
   template: ContainerTemplate | null;
+  /** Seed a new independent template without changing the shared source. */
+  copyFrom?: ContainerTemplate;
   onClose: () => void;
   onSaved: (saved: ContainerTemplate) => void;
 }
 
 type DefaultChoice = { item: DeploymentContainerPreviewItem; fingerprint: string };
 
-export function ContainerTemplateModal({ open, template, onClose, onSaved }: Props) {
+export function ContainerTemplateModal({ open, template, copyFrom, onClose, onSaved }: Props) {
   const { t, i18n } = useTranslation();
   const tr = (cn: string, en: string) => i18n.language.startsWith('zh') ? cn : en;
   const { markClean, isDirty } = useFormDirty(open);
@@ -45,12 +47,19 @@ export function ContainerTemplateModal({ open, template, onClose, onSaved }: Pro
     setLoadedDefault(null);
     setPendingDefault(null);
     if (!open) return;
-    const next = containerTemplateForm(template);
-    setSource(template);
+    const sourceTemplate = template ?? copyFrom ?? null;
+    const next = containerTemplateForm(sourceTemplate);
+    if (!template && copyFrom) {
+      next.template_name = `${next.template_name.slice(0, 117)} - copy`;
+      // Manager can be served over HTTP on a server IP, where randomUUID is unavailable.
+      const suffix = `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`.slice(-12);
+      next.container_id = `${next.container_id.slice(0, 80)}-copy-${suffix}`;
+    }
+    setSource(sourceTemplate);
     setForm(next);
     markClean(next);
     return () => { requestVersion.current += 1; };
-  }, [open, template, markClean]);
+  }, [open, template, copyFrom, markClean]);
 
   const update = <K extends keyof ContainerTemplateForm>(key: K, value: ContainerTemplateForm[K]) =>
     setForm(current => ({ ...current, [key]: value }));

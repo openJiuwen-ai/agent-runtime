@@ -27,8 +27,9 @@ import {
 interface Props {
   open: boolean;
   template: PermissionsTemplate | null;
+  copyFrom?: PermissionsTemplate;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (saved: PermissionsTemplate) => void;
 }
 
 const FIELD_MAX_LENGTH = {
@@ -49,7 +50,7 @@ function FieldLabel({ children, required }: { children: ReactNode; required?: bo
   );
 }
 
-export function SafetyGuardrailsModal({ open, template, onClose, onSaved }: Props) {
+export function SafetyGuardrailsModal({ open, template, copyFrom, onClose, onSaved }: Props) {
   const { t } = useTranslation();
   const checkJson = useInvalidJsonChecker();
   const { markClean, isDirty } = useFormDirty(open);
@@ -60,20 +61,22 @@ export function SafetyGuardrailsModal({ open, template, onClose, onSaved }: Prop
 
   useEffect(() => {
     if (!open) return;
-    const nextName = template
-      ? clipField(template.template_name, FIELD_MAX_LENGTH.template_name)
+    const sourceTemplate = template ?? copyFrom;
+    const sourceName = sourceTemplate
+      ? clipField(sourceTemplate.template_name, FIELD_MAX_LENGTH.template_name)
       : '';
-    const nextDesc = template
-      ? clipField(template.description ?? '', FIELD_MAX_LENGTH.description)
+    const nextName = !template && copyFrom ? `${sourceName.slice(0, 117)} - copy` : sourceName;
+    const nextDesc = sourceTemplate
+      ? clipField(sourceTemplate.description ?? '', FIELD_MAX_LENGTH.description)
       : '';
-    const nextForm = template
-      ? permissionsBodyToFormState(template.body ?? {})
+    const nextForm = sourceTemplate
+      ? permissionsBodyToFormState(sourceTemplate.body ?? {})
       : createDefaultPermissionsFormState();
     setTemplateName(nextName);
     setDescription(nextDesc);
     setForm(nextForm);
     markClean({ templateName: nextName, description: nextDesc, form: nextForm });
-  }, [open, template, markClean]);
+  }, [open, template, copyFrom, markClean]);
 
   const submit = async () => {
     if (!templateName.trim()) {
@@ -94,21 +97,32 @@ export function SafetyGuardrailsModal({ open, template, onClose, onSaved }: Prop
       return;
     }
 
+    let permissionBody = permissionsFormStateToBody(form);
+    if (!template && copyFrom) {
+      const normalizedSource = permissionsFormStateToBody(permissionsBodyToFormState(copyFrom.body));
+      const preserved = structuredClone(copyFrom.body);
+      // Keep untouched source fields exactly, including nested extensions and absent defaults.
+      for (const [key, value] of Object.entries(permissionBody)) {
+        if (JSON.stringify(value) !== JSON.stringify(normalizedSource[key])) preserved[key] = value;
+      }
+      for (const key of Object.keys(normalizedSource)) {
+        if (!(key in permissionBody) && key in preserved) delete preserved[key];
+      }
+      permissionBody = preserved;
+    }
     const body: PermissionsTemplateCreateBody | PermissionsTemplateUpdateBody = {
       template_name: templateName.trim(),
       description: description.trim() || null,
-      body: permissionsFormStateToBody(form),
+      body: permissionBody,
     };
 
     setSaving(true);
     try {
-      if (template) {
-        await PermissionsTemplateApi.update(template.template_id, body);
-      } else {
-        await PermissionsTemplateApi.create({ ...body, enabled: true } as PermissionsTemplateCreateBody);
-      }
+      const saved = template
+        ? await PermissionsTemplateApi.update(template.template_id, body)
+        : await PermissionsTemplateApi.create({ data: copyFrom?.data, ...body, enabled: true } as PermissionsTemplateCreateBody);
       toast('success', t('success.saved'));
-      onSaved();
+      onSaved(saved);
     } catch (e) {
       toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
     } finally {

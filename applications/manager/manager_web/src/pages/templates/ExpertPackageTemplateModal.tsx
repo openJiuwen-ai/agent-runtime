@@ -5,12 +5,14 @@ import { LimitedTextInput } from '../../components/LimitedTextInput';
 import { ExpertPackageTemplateApi, PackageCatalogApi, ApiError } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import type { ExpertPackageKind, ExpertPackageTemplate, PackageCatalogItem } from '../../types';
+import { useFormDirty } from '../../hooks/useFormDirty';
 
 interface Props {
   open: boolean;
   template: ExpertPackageTemplate | null;
+  copyFrom?: ExpertPackageTemplate;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (saved: ExpertPackageTemplate) => void;
   /** 409 冲突：关弹窗并刷新列表，语义与 onSaved 分离。 */
   onConflict: () => void;
 }
@@ -35,8 +37,9 @@ function itemKey(item: { kind: string; id: string }) {
   return `${item.kind}:${item.id}`;
 }
 
-export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, onConflict }: Props) {
+export function ExpertPackageTemplateModal({ open, template, copyFrom, onClose, onSaved, onConflict }: Props) {
   const { t } = useTranslation();
+  const { markClean, isDirty } = useFormDirty(open);
   const editing = template !== null;
   const [catalog, setCatalog] = useState<PackageCatalogItem[]>([]);
   const [catalogError, setCatalogError] = useState('');
@@ -48,10 +51,12 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, o
 
   useEffect(() => {
     if (!open) return;
-    if (template) {
-      setName(template.template_name);
-      setDescription(template.description || '');
-      setSelected((template.packages ?? []).map((item) => ({
+    const sourceTemplate = template ?? copyFrom;
+    const nextName = sourceTemplate ? !template && copyFrom ? `${sourceTemplate.template_name.slice(0, 117)} - copy` : sourceTemplate.template_name : '';
+    if (sourceTemplate) {
+      setName(!template && copyFrom ? `${sourceTemplate.template_name.slice(0, 117)} - copy` : sourceTemplate.template_name);
+      setDescription(sourceTemplate.description || '');
+      setSelected((sourceTemplate.packages ?? []).map((item) => ({
         kind: item.kind,
         id: item.asset_id,
         displayName: item.asset_id,
@@ -62,6 +67,7 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, o
       setDescription('');
       setSelected([]);
     }
+    markClean({ name: nextName, description: sourceTemplate?.description || '', selected: (sourceTemplate?.packages ?? []).map(item => `${item.kind}:${item.asset_id}`).sort() });
     setCatalogLoading(true);
     setCatalogError('');
     PackageCatalogApi.catalog()
@@ -84,7 +90,7 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, o
         setCatalogError(error instanceof ApiError ? error.detail : (error as Error).message);
       })
       .finally(() => setCatalogLoading(false));
-  }, [open, template]);
+  }, [open, template, copyFrom, markClean]);
 
   const toggle = (item: PackageCatalogItem) => {
     const key = itemKey(item);
@@ -121,15 +127,16 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, o
     }));
     setSaving(true);
     try {
+      let saved: ExpertPackageTemplate;
       if (editing && template) {
-        await ExpertPackageTemplateApi.update(template.template_id, {
+        saved = await ExpertPackageTemplateApi.update(template.template_id, {
           template_name: templateName,
           description: description.trim(),
           packages,
           expected_revision: template.revision ?? 0,
         });
       } else {
-        await ExpertPackageTemplateApi.create({
+        saved = await ExpertPackageTemplateApi.create({
           template_name: templateName,
           description: description.trim(),
           packages,
@@ -137,7 +144,7 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, o
         });
       }
       toast('success', t('success.saved'));
-      onSaved();
+      onSaved(saved);
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
         toast('danger', t('expertPackageTemplate.conflictStale'));
@@ -205,6 +212,7 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, o
       open={open}
       title={editing ? t('expertPackageTemplate.edit') : t('expertPackageTemplate.new')}
       onClose={onClose}
+      dirty={isDirty({ name, description, selected: selected.map(item => `${item.kind}:${item.id}`).sort() })}
       size="lg"
       footer={
         <>

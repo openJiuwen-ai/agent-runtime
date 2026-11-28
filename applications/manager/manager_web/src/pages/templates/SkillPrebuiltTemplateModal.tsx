@@ -16,8 +16,9 @@ import type {
 interface Props {
   open: boolean;
   template: SkillPrebuiltTemplate | null;
+  copyFrom?: SkillPrebuiltTemplate;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (saved: SkillPrebuiltTemplate) => void;
 }
 
 /** 与 skill_prebuilt_template 表 ColumnDefinition length 一致 */
@@ -96,7 +97,7 @@ function buildTemplateData(
   return Object.keys(next).length ? next : undefined;
 }
 
-export function SkillPrebuiltTemplateModal({ open, template, onClose, onSaved }: Props) {
+export function SkillPrebuiltTemplateModal({ open, template, copyFrom, onClose, onSaved }: Props) {
   const { t } = useTranslation();
   const { markClean, isDirty } = useFormDirty(open);
   const [form, setForm] = useState<FormState>(empty);
@@ -104,22 +105,24 @@ export function SkillPrebuiltTemplateModal({ open, template, onClose, onSaved }:
 
   useEffect(() => {
     if (!open) return;
-    const packageUrl = template?.package_url || '';
-    const next: FormState = template
+    const sourceTemplate = template ?? copyFrom;
+    const packageUrl = sourceTemplate?.package_url || '';
+    const next: FormState = sourceTemplate
       ? {
-          template_name: clipField(template.template_name, FIELD_MAX_LENGTH.template_name),
-          description: clipField(template.description ?? '', FIELD_MAX_LENGTH.description),
-          skill_id: clipField(template.skill_id, FIELD_MAX_LENGTH.skill_id),
+          template_name: clipField(sourceTemplate.template_name, FIELD_MAX_LENGTH.template_name),
+          description: clipField(sourceTemplate.description ?? '', FIELD_MAX_LENGTH.description),
+          skill_id: clipField(sourceTemplate.skill_id, FIELD_MAX_LENGTH.skill_id),
           package_url: clipField(packageUrl, FIELD_MAX_LENGTH.package_url),
-          source_id: clipField(template.source_id ?? '', FIELD_MAX_LENGTH.source_id),
-          version_id: clipField(template.version_id ?? '', FIELD_MAX_LENGTH.version_id),
-          sha256: clipField(readDataString(template.data ?? undefined, 'sha256'), 64),
-          author: clipField(readDataString(template.data ?? undefined, 'author'), FIELD_MAX_LENGTH.author),
+          source_id: clipField(sourceTemplate.source_id ?? '', FIELD_MAX_LENGTH.source_id),
+          version_id: clipField(sourceTemplate.version_id ?? '', FIELD_MAX_LENGTH.version_id),
+          sha256: clipField(readDataString(sourceTemplate.data ?? undefined, 'sha256'), 64),
+          author: clipField(readDataString(sourceTemplate.data ?? undefined, 'author'), FIELD_MAX_LENGTH.author),
         }
       : empty;
+    if (!template && copyFrom) next.template_name = `${next.template_name.slice(0, 117)} - copy`;
     setForm(next);
     markClean(next);
-  }, [open, template, markClean]);
+  }, [open, template, copyFrom, markClean]);
 
   const update = <K extends keyof FormState>(k: K, v: FormState[K]) =>
     setForm((s) => ({ ...s, [k]: v }));
@@ -175,10 +178,11 @@ export function SkillPrebuiltTemplateModal({ open, template, onClose, onSaved }:
     }
 
     const description = form.description.trim() || null;
-    const data = buildTemplateData(template?.data ?? undefined, form.author, form.sha256, provider);
+    const data = buildTemplateData((template ?? copyFrom)?.data ?? undefined, form.author, form.sha256, provider);
 
     setSaving(true);
     try {
+      let saved: SkillPrebuiltTemplate;
       if (template) {
         // 空 URL 省略不发：后端会把 "" 收成 None，但未改字段时不应误清已有 URL。
         // 仅在原先有 URL、现在要清空时发 null。
@@ -195,9 +199,9 @@ export function SkillPrebuiltTemplateModal({ open, template, onClose, onSaved }:
         } else if (template.package_url) {
           patch.package_url = null;
         }
-        await SkillPrebuiltTemplateApi.update(template.template_id, patch);
+        saved = await SkillPrebuiltTemplateApi.update(template.template_id, patch);
       } else {
-        await SkillPrebuiltTemplateApi.create({
+        saved = await SkillPrebuiltTemplateApi.create({
           template_name: form.template_name.trim(),
           description,
           skill_id: form.skill_id.trim(),
@@ -209,7 +213,7 @@ export function SkillPrebuiltTemplateModal({ open, template, onClose, onSaved }:
         });
       }
       toast('success', t('success.saved'));
-      onSaved();
+      onSaved(saved);
     } catch (e) {
       toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
     } finally {

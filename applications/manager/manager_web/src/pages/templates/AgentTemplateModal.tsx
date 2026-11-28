@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ConfigRefreshCostHint } from '../../components/ConfigRefreshCostHint';
 import { Modal, ModalCancelButton } from '../../components/Modal';
+import { useEditorPresentation } from '../../components/InlineEditorContext';
 import { Switch } from '../../components/Switch';
 import { TemplateRefEditor } from '../../components/TemplateRefEditor';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
@@ -25,7 +26,8 @@ import {
 interface Props {
   open: boolean;
   template: AgentTemplate | null;
-  registrationConfig: AgentClientRegistrationCapabilities | null;
+  copyFrom?: AgentTemplate;
+  registrationConfig?: AgentClientRegistrationCapabilities | null;
   onClose: () => void;
   onSaved: (saved: AgentTemplate, options?: { keepOpen: true }) => void;
 }
@@ -88,8 +90,11 @@ function parseCustomConfig(text: string): {
   }
 }
 
-export function AgentTemplateModal({ open, template, registrationConfig, onClose, onSaved }: Props) {
+export function AgentTemplateModal({ open, template, copyFrom, registrationConfig, onClose, onSaved }: Props) {
   const { t } = useTranslation();
+  const presentation = useEditorPresentation();
+  const [discoveredRegistration, setDiscoveredRegistration] = useState<AgentClientRegistrationCapabilities | null>(null);
+  const effectiveRegistrationConfig = registrationConfig === undefined ? discoveredRegistration : registrationConfig;
   const { markClean, isDirty } = useFormDirty(open);
   const [form, setForm] = useState<FormState>(empty);
   const [saving, setSaving] = useState(false);
@@ -99,19 +104,30 @@ export function AgentTemplateModal({ open, template, registrationConfig, onClose
   const [registering, setRegistering] = useState(false);
   const [showSecrets, setShowSecrets] = useState(false);
   const currentTemplate = savedTemplate ?? template;
+  const sourceTemplate = currentTemplate ?? copyFrom;
   const binding = currentTemplate?.keycloak_client;
   const busy = saving || registering;
 
   useEffect(() => {
+    if (!open || registrationConfig !== undefined) return;
+    let cancelled = false;
+    void AgentClientRegistrationApi.capabilities().then(config => {
+      if (!cancelled) setDiscoveredRegistration(config);
+    }).catch(() => { if (!cancelled) setDiscoveredRegistration(null); });
+    return () => { cancelled = true; };
+  }, [open, registrationConfig]);
+
+  useEffect(() => {
     if (!open) return;
-    const next: FormState = template
+    const source = template ?? copyFrom;
+    const next: FormState = source
       ? {
-          template_name: template.template_name.slice(0, FIELD_MAX_LENGTH.template_name),
-          description: (template.description ?? '').slice(0, FIELD_MAX_LENGTH.description),
-          agent_tags: toCommaList(template.agent_tags),
-          template_ref: normalizeTemplateRefFromApi(template.template_ref),
-          custom_config_json: customConfigText(template.data),
-          upload_local_skill: template.data?.upload_local_skill === true,
+          template_name: (!template && copyFrom ? `${source.template_name.slice(0, 117)} - copy` : source.template_name).slice(0, FIELD_MAX_LENGTH.template_name),
+          description: (source.description ?? '').slice(0, FIELD_MAX_LENGTH.description),
+          agent_tags: toCommaList(source.agent_tags),
+          template_ref: normalizeTemplateRefFromApi(source.template_ref),
+          custom_config_json: customConfigText(source.data),
+          upload_local_skill: source.data?.upload_local_skill === true,
         }
       : empty;
     setForm(next);
@@ -120,7 +136,7 @@ export function AgentTemplateModal({ open, template, registrationConfig, onClose
     setClientId('');
     setRegistrationError(null);
     setShowSecrets(false);
-  }, [open, template, markClean]);
+  }, [open, template, copyFrom, markClean]);
 
   const update = <K extends keyof FormState>(k: K, v: FormState[K]) =>
     setForm((s) => ({ ...s, [k]: v }));
@@ -157,9 +173,9 @@ export function AgentTemplateModal({ open, template, registrationConfig, onClose
     }
 
     const nextData: Record<string, unknown> = {
-      ...(currentTemplate?.data ?? {}),
+      ...(sourceTemplate?.data ?? {}),
     };
-    if (form.custom_config_json !== customConfigText(currentTemplate?.data ?? null)) {
+    if (form.custom_config_json !== customConfigText(sourceTemplate?.data ?? null)) {
       nextData.custom_config = customConfig.value;
     }
     nextData.upload_local_skill = form.upload_local_skill;
@@ -175,7 +191,7 @@ export function AgentTemplateModal({ open, template, registrationConfig, onClose
 
   const registerClient = async () => {
     const id = clientId.trim();
-    if (!registrationConfig?.enabled || !registrationConfig.configured
+    if (!effectiveRegistrationConfig?.enabled || !effectiveRegistrationConfig.configured
       || busy || binding || credentialsExist || !id) return;
     const body = currentTemplate ? undefined : templateBody();
     if (!currentTemplate && !body) return;
@@ -261,7 +277,7 @@ export function AgentTemplateModal({ open, template, registrationConfig, onClose
           <FieldLabel>{t('agentTemplate.templateDescription')}</FieldLabel>
           <LimitedTextInput ariaLabel={t('agentTemplate.templateDescription')} value={form.description} maxLength={FIELD_MAX_LENGTH.description} onChange={(value) => update('description', value)} />
         </div>
-        {registrationConfig?.enabled && (
+        {effectiveRegistrationConfig?.enabled && (
           <section className="agent-capability-card" aria-labelledby="agent-client-title">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 id="agent-client-title" className="text-sm font-semibold text-text-strong">
@@ -282,7 +298,7 @@ export function AgentTemplateModal({ open, template, registrationConfig, onClose
                   placeholder="customer-agent"
                   onChange={(event) => setClientId(event.target.value)}
                   readOnly={!!binding}
-                  disabled={!binding && (!registrationConfig.configured || busy || credentialsExist)}
+                  disabled={!binding && (!effectiveRegistrationConfig.configured || busy || credentialsExist)}
                   spellCheck={false}
                 />
               </div>
@@ -291,7 +307,7 @@ export function AgentTemplateModal({ open, template, registrationConfig, onClose
                   type="button"
                   className="btn primary"
                   onClick={() => void registerClient()}
-                  disabled={!registrationConfig.configured || busy || credentialsExist || !clientId.trim()
+                  disabled={!effectiveRegistrationConfig.configured || busy || credentialsExist || !clientId.trim()
                     || (!currentTemplate && (!form.template_name.trim() || customConfig.error !== null))}
                 >
                   {t(registering ? 'agentTemplate.registration.pending'
@@ -303,7 +319,7 @@ export function AgentTemplateModal({ open, template, registrationConfig, onClose
             {binding && <p className="mt-2 text-xs text-muted">{t('agentTemplate.registration.boundHint')}</p>}
             {!binding && !currentTemplate && <p className="mt-2 text-xs text-muted">{t('agentTemplate.registration.saveHint')}</p>}
             {!binding && credentialsExist && <p className="mt-2 text-xs text-muted">{t('agentTemplate.registration.alreadyConfigured')}</p>}
-            {!binding && !registrationConfig.configured && <p className="mt-2 text-xs text-danger" role="alert">{t('agentTemplate.registration.unconfigured')}</p>}
+            {!binding && !effectiveRegistrationConfig.configured && <p className="mt-2 text-xs text-danger" role="alert">{t('agentTemplate.registration.unconfigured')}</p>}
             {registrationError && (
               <div className="mt-3 rounded-md bg-danger-subtle px-3 py-2 text-xs text-danger" role="alert">
                 <p className="font-medium">{t(`agentTemplate.registration.${registrationError}`)}</p>
@@ -323,7 +339,7 @@ export function AgentTemplateModal({ open, template, registrationConfig, onClose
             value={form.template_ref}
             onChange={(v) => update('template_ref', v)}
             optionalSelectedCount={(customConfig.value.length ? 1 : 0) + (form.upload_local_skill ? 1 : 0)}
-            expandOptional={!!customConfig.error}
+            expandOptional={presentation.readOnly || !!customConfig.error}
             optionalContent={(
               <>
                 <section className="agent-capability-card" data-testid="agent-template-upload-local-skill">

@@ -18,8 +18,9 @@ import { isValidHttpUrl } from '../../utils/url';
 interface Props {
   open: boolean;
   template: EmbeddingTemplate | null;
+  copyFrom?: EmbeddingTemplate;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (saved: EmbeddingTemplate) => void;
 }
 
 const FIELD_MAX_LENGTH = {
@@ -62,7 +63,7 @@ function FieldLabel({ children, required }: { children: ReactNode; required?: bo
   );
 }
 
-export function EmbeddingTemplateModal({ open, template, onClose, onSaved }: Props) {
+export function EmbeddingTemplateModal({ open, template, copyFrom, onClose, onSaved }: Props) {
   const { t } = useTranslation();
   const { markClean, isDirty } = useFormDirty(open);
   const [form, setForm] = useState<FormState>(empty);
@@ -70,20 +71,22 @@ export function EmbeddingTemplateModal({ open, template, onClose, onSaved }: Pro
 
   useEffect(() => {
     if (!open) return;
-    const next: FormState = template
+    const sourceTemplate = template ?? copyFrom;
+    const next: FormState = sourceTemplate
       ? {
-          template_name: template.template_name,
-          description: template.description ?? '',
-          embed_tags: toCommaList(template.embed_tags),
-          api_base: template.api_base,
-          api_key: template.api_key,
-          model_id: template.model_id,
-          model_provider: DEFAULT_MODEL_PROVIDER,
+          template_name: sourceTemplate.template_name,
+          description: sourceTemplate.description ?? '',
+          embed_tags: toCommaList(sourceTemplate.embed_tags),
+          api_base: sourceTemplate.api_base,
+          api_key: sourceTemplate.api_key,
+          model_id: sourceTemplate.model_id,
+          model_provider: sourceTemplate.model_provider || DEFAULT_MODEL_PROVIDER,
         }
       : empty;
+    if (!template && copyFrom) next.template_name = `${next.template_name.slice(0, 117)} - copy`;
     setForm(next);
     markClean(next);
-  }, [open, template, markClean]);
+  }, [open, template, copyFrom, markClean]);
 
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((current) => ({ ...current, [key]: value }));
@@ -128,19 +131,22 @@ export function EmbeddingTemplateModal({ open, template, onClose, onSaved }: Pro
       api_base: form.api_base.trim(),
       api_key: form.api_key,
       model_id: form.model_id.trim(),
-      model_provider: DEFAULT_MODEL_PROVIDER,
+      model_provider: form.model_provider,
       enabled: true,
     };
 
     setSaving(true);
     try {
-      if (template) {
-        await EmbeddingTemplateApi.update(template.template_id, body);
-      } else {
-        await EmbeddingTemplateApi.create(body as EmbeddingTemplateCreateBody);
-      }
+      const saved = template
+        ? await EmbeddingTemplateApi.update(template.template_id, body)
+        : await EmbeddingTemplateApi.create({
+          data: copyFrom?.data,
+          parameters: copyFrom?.parameters ?? undefined,
+          client_config: copyFrom?.client_config ?? undefined,
+          ...body,
+        } as EmbeddingTemplateCreateBody);
       toast('success', t('success.saved'));
-      onSaved();
+      onSaved(saved);
     } catch (error) {
       toast(
         'danger',
@@ -181,6 +187,7 @@ export function EmbeddingTemplateModal({ open, template, onClose, onSaved }: Pro
             value={form.model_provider}
             onChange={(event) => update('model_provider', event.target.value)}
           >
+            {!MODEL_PROVIDER_OPTIONS.some(provider => provider === form.model_provider) && <option value={form.model_provider}>{form.model_provider}</option>}
             {MODEL_PROVIDER_OPTIONS.map((provider) => (
               <option key={provider} value={provider}>
                 {provider}
