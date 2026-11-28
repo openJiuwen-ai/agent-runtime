@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../../auth/AuthContext';
-import { ApiError, hasPermission, WorkspaceQuotaApi } from '../../../services/api';
+import { hasPermission, WorkspaceQuotaApi } from '../../../services/api';
 import { useAsync } from '../../../hooks/useAsync';
 import { useFormDirty } from '../../../hooks/useFormDirty';
 import { useListSearch } from '../../../hooks/useListSearch';
@@ -24,6 +24,7 @@ import { toast } from '../../../stores/uiStore';
 import { formatTime, truncate } from '../../../utils/format';
 import { INT32_MAX, isNonNegInt32 } from '../../../utils/intBounds';
 import { matchExprToEditorString } from '../../../utils/matchExpr';
+import { quotaErrorMessage } from '../../../utils/quotaError';
 
 const GIB = 1024 ** 3;
 const TIER_GIB = [1, 5, 10, 20, 50, 100] as const;
@@ -331,7 +332,7 @@ export function WorkspaceQuotaPolicyTab({ instanceId, onChange }: { instanceId: 
       await reload();
       onChange?.();
     } catch (e) {
-      toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+      toast('danger', quotaErrorMessage(e, t, 'save'));
     } finally {
       setSaving(false);
     }
@@ -360,7 +361,7 @@ export function WorkspaceQuotaPolicyTab({ instanceId, onChange }: { instanceId: 
       await reload();
       onChange?.();
     } catch (e) {
-      toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+      toast('danger', quotaErrorMessage(e, t, 'save'));
     } finally {
       setTogglingId(null);
     }
@@ -374,7 +375,7 @@ export function WorkspaceQuotaPolicyTab({ instanceId, onChange }: { instanceId: 
       await reload();
       onChange?.();
     } catch (e) {
-      toast('danger', t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+      toast('danger', quotaErrorMessage(e, t, 'delete'));
     }
   };
 

@@ -1392,7 +1392,9 @@
     "deleteFailed": "Delete failed: {{detail}}",
     "deleteFailedGeneric": "Delete failed",
     "invalidJson": "Invalid JSON: {{detail}}",
-    "validationFailed": "Request parameter validation failed"
+    "validationFailed": "Request parameter validation failed",
+    "upstreamSyncFailed": "Save failed: upstream service unavailable, please retry later",
+    "upstreamDeleteFailed": "Delete failed: upstream service unavailable, please retry later"
   },
   "success": {
     "saved": "Saved",

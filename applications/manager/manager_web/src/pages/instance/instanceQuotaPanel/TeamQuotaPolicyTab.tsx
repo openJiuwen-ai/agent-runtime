@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../../auth/AuthContext';
-import { ApiError, hasPermission, TeamQuotaApi } from '../../../services/api';
+import { hasPermission, TeamQuotaApi } from '../../../services/api';
 import { useAsync } from '../../../hooks/useAsync';
 import { useFormDirty } from '../../../hooks/useFormDirty';
 import type { TeamQuotaPolicy, WorkspaceQuotaMatchExpr } from '../../../types';
@@ -16,6 +16,7 @@ import { toast } from '../../../stores/uiStore';
 import { formatTime } from '../../../utils/format';
 import { INT32_MAX, isNonNegInt32 } from '../../../utils/intBounds';
 import { matchExprToEditorString } from '../../../utils/matchExpr';
+import { quotaErrorMessage } from '../../../utils/quotaError';
 
 const FIELD_MAX_LENGTH = {
   policy_name: 128,
@@ -163,7 +164,7 @@ export function TeamQuotaPolicyTab({ instanceId, onChange }: { instanceId: strin
       await reload();
       onChange?.();
     } catch (e) {
-      toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+      toast('danger', quotaErrorMessage(e, t, 'save'));
     } finally {
       setSaving(false);
     }
@@ -177,7 +178,7 @@ export function TeamQuotaPolicyTab({ instanceId, onChange }: { instanceId: strin
       await reload();
       onChange?.();
     } catch (e) {
-      toast('danger', t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+      toast('danger', quotaErrorMessage(e, t, 'delete'));
     }
   };
 
@@ -281,9 +282,7 @@ export function TeamQuotaPolicyTab({ instanceId, onChange }: { instanceId: strin
                                 await reload();
                                 onChange?.();
                               }).catch((e) => {
-                                toast('danger', t('errors.saveFailed', {
-                                  detail: e instanceof ApiError ? e.detail : (e as Error).message,
-                                }));
+                                toast('danger', quotaErrorMessage(e, t, 'save'));
                               });
                             }}
                           />

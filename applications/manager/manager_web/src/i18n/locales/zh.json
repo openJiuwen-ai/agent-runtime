@@ -1392,7 +1392,9 @@
     "deleteFailed": "删除失败：{{detail}}",
     "deleteFailedGeneric": "删除失败",
     "invalidJson": "JSON 格式不正确：{{detail}}",
-    "validationFailed": "请求参数校验失败"
+    "validationFailed": "请求参数校验失败",
+    "upstreamSyncFailed": "保存失败：上游服务暂不可用，请稍后重试",
+    "upstreamDeleteFailed": "删除失败：上游服务暂不可用，请稍后重试"
   },
   "success": {
     "saved": "保存成功",

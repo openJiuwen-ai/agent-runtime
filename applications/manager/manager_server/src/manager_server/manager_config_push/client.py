@@ -31,6 +31,7 @@ def _reject_detail(resp: httpx.Response) -> str:
     """从 Gateway/Runtime 错误响应抽出可读原因。
 
     Runtime 失败信封用 ``error_message``（不是 FastAPI 的 ``detail``）；
+    Gateway 422 的 ``detail`` 是 list（Pydantic 校验项），逐条抽 loc+msg；
     优先读信封字段，避免把整段 JSON 原文甩给上层 toast。
     """
     text = (resp.text or "")[:500]
@@ -51,6 +52,30 @@ def _reject_detail(resp: httpx.Response) -> str:
             value = detail.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
+    if isinstance(detail, list):
+        # FastAPI / Pydantic 422 的 detail 形如
+        # [{"type": "int_parsing", "loc": ["body", "priority"], "msg": "..."}]。
+        # 逐条抽 loc + msg 拼成可读文案，避免把整段 JSON 原文甩给上层 toast（issue #200）。
+        parts: list[str] = []
+        for item in detail:
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    parts.append(text)
+                continue
+            if isinstance(item, dict):
+                msg = item.get("msg")
+                if not isinstance(msg, str) or not msg.strip():
+                    continue
+                loc = item.get("loc")
+                if isinstance(loc, list) and loc:
+                    loc_text = ".".join(str(part) for part in loc if part != "")
+                    if loc_text:
+                        parts.append(f"{loc_text}: {msg.strip()}")
+                        continue
+                parts.append(msg.strip())
+        if parts:
+            return "; ".join(parts)
     return text
 
 
@@ -138,9 +163,11 @@ async def http_request(
 
     if resp.status_code >= 400:
         detail = _reject_detail(resp)
-        # Runtime 校验类 4xx：直接透传 error_message，不再包成
-        # "HTTP push rejected … detail='{整段 JSON}'"（P0：去掉传输层噪音）。
-        if role == "runtime" and 400 <= resp.status_code < 500 and detail:
+        # 校验类 4xx：直接透传 _reject_detail 抽出的可读文案，不再包成
+        # "HTTP push rejected … detail='{整段 JSON}'"（去掉传输层噪音，issue #200）。
+        # 422 的 list 型 detail 由 _reject_detail 逐条抽 loc+msg 拼成可读文案；
+        # 5xx 才走带 status 的包装，避免把上游不可用暴露成校验错误。
+        if 400 <= resp.status_code < 500 and detail:
             raise ValueError(detail)
         raise ValueError(
             f"{role} HTTP push rejected status={resp.status_code} detail={detail!r}"
