@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAsync } from '../../hooks/useAsync';
 import { useListSearch } from '../../hooks/useListSearch';
-import { ModelTemplateApi } from '../../services/api';
+import { ApiError, ModelTemplateApi } from '../../services/api';
 import type { ModelTemplate } from '../../types';
 import { Empty } from '../../components/Empty';
 import { Pagination } from '../../components/Pagination';
@@ -16,6 +16,7 @@ import {
 } from '../../components/TableColumnSort';
 import { ListSearchInput } from '../../components/ListSearchInput';
 import { ModelTemplateModal } from './ModelTemplateModal';
+import { connectionTestFailureDetail } from './modelConnectionTestMessage';
 import { toast } from '../../stores/uiStore';
 import { bumpGuideRevision } from '../../stores/guideStore';
 import { useGuideAutoOpen } from '../../hooks/useGuideAutoOpen';
@@ -111,6 +112,7 @@ export function ModelTemplatesPage() {
   const [editing, setEditing] = useState<ModelTemplate | null>(null);
   const [delTarget, setDelTarget] = useState<ModelTemplate | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [testingId, setTestingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (data?.items) {
@@ -154,6 +156,37 @@ export function ModelTemplatesPage() {
       return;
     }
     setDelTarget(row);
+  };
+
+  const testConnection = async (row: ModelTemplate) => {
+    if (testingId) return;
+    setTestingId(row.template_id);
+    try {
+      const result = await ModelTemplateApi.testConnection(row.template_id);
+      if (!result.ok) {
+        const detail = connectionTestFailureDetail(result, t);
+        toast(
+          'danger',
+          detail
+            ? t('modelTemplate.testFailedWithDetail', { detail })
+            : t('modelTemplate.testFailed'),
+          9000,
+        );
+        return;
+      }
+      toast('success', t('modelTemplate.testOk'));
+    } catch (e) {
+      const detail = (e instanceof ApiError ? e.detail : '').trim();
+      toast(
+        'danger',
+        detail
+          ? t('modelTemplate.testFailedWithDetail', { detail })
+          : t('modelTemplate.testFailed'),
+        9000,
+      );
+    } finally {
+      setTestingId(null);
+    }
   };
 
   return (
@@ -254,7 +287,7 @@ export function ModelTemplatesPage() {
                     onChange={(value) => handleSortChange('model_id', value)}
                   />
                 </th>
-                <th>
+                <th className="w-[12rem] max-w-[12rem]">
                   <div className="th-filter">
                     <span className="th-filter__label">{t('modelTemplate.modelType')}</span>
                     <TableColumnSort
@@ -314,7 +347,7 @@ export function ModelTemplatesPage() {
                     onChange={(value) => handleSortChange('updated_at', value)}
                   />
                 </th>
-                <th className="whitespace-nowrap min-w-[9.5rem]">{t('common.actions')}</th>
+                <th className="whitespace-nowrap min-w-[12.5rem]">{t('common.actions')}</th>
               </tr>
             </thead>
             <tbody>
@@ -342,8 +375,11 @@ export function ModelTemplatesPage() {
                     <td className="mono text-xs min-w-[10rem] max-w-[18rem] break-all align-top text-text-strong" title={row.model_id}>
                       {row.model_id}
                     </td>
-                    <td className="whitespace-nowrap">
-                      <div className="flex items-center gap-1 flex-wrap">
+                    <td
+                      className="w-[12rem] max-w-[12rem] align-top"
+                      title={types.map(String).join(', ')}
+                    >
+                      <div className="flex max-w-full flex-wrap items-center gap-1 overflow-hidden">
                         {types.map((it) => (
                           <span key={String(it)} className={`tag ${String(it).toLowerCase()}`}>{String(it)}</span>
                         ))}
@@ -374,8 +410,17 @@ export function ModelTemplatesPage() {
                       )}
                     </td>
                     <td className="mono text-[11px] text-muted whitespace-nowrap">{formatTime(row.updated_at)}</td>
-                    <td className="whitespace-nowrap min-w-[9.5rem]">
+                    <td className="whitespace-nowrap min-w-[12.5rem]">
                       <div className="flex items-center gap-1">
+                        <button
+                          className="btn sm ghost"
+                          disabled={testingId === row.template_id}
+                          onClick={() => void testConnection(row)}
+                        >
+                          {testingId === row.template_id
+                            ? t('modelTemplate.testingConnection')
+                            : t('modelTemplate.testConnection')}
+                        </button>
                         <ResourceExportButton resourceType="model" resourceIds={[row.template_id]} />
                         <button
                           className="btn sm ghost"

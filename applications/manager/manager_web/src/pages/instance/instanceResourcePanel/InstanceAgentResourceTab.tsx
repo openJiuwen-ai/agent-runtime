@@ -385,7 +385,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
           )}
         </div>
       </div>
-      <div className="card manager-page-table !p-0">
+      <div className="card !p-0">
         {focusTemplate && <div className="template-filter-note flex justify-between items-center gap-2"><span>{t('redesign.clusterTemplateFilter')} · {templateLabel(focusTemplate)}</span><button className="btn ghost sm" onClick={() => { const next = new URLSearchParams(params); next.delete('focusTemplate'); navigate(`${path}${next.size ? `?${next}` : ''}`, { replace: true }); }}>{t('redesign.showAllBindings')}</button></div>}
         {loading ? (
           <div className="p-4 text-sm text-muted">{t('common.loading')}</div>

@@ -306,6 +306,38 @@ class ModelTemplateOut(BaseModel):
     updated_at: str | None
 
 
+class ModelTemplateConnectionTestBody(SafeTextMixin):
+    """未落库草稿的连通性探测请求（弹窗内「测试连接」）。"""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    api_base: ApiBaseUrl
+    api_key: str = Field(..., min_length=1)
+    model_id: str = Field(..., min_length=1, max_length=128)
+    model_provider: str = Field(..., min_length=1, max_length=64)
+    timeout: int = Field(default=15, ge=1, le=INT32_MAX)
+    verify_ssl: bool = False
+    data: dict[str, Any] | None = None
+
+    @field_validator("data")
+    @classmethod
+    def _normalize_data_headers(cls, value: Any) -> dict[str, Any] | None:
+        return normalize_model_template_data(value)
+
+
+class ModelTemplateConnectionTestOut(BaseModel):
+    ok: bool
+    latency_ms: int
+    status_code: int | None = None
+    checked_url: str
+    model_id_found: bool | None = None
+    detail: str | None = None
+    # 失败分类码：timeout / network / auth / balance / rate_limit /
+    # not_found / model_not_found / target_blocked / redirect / server /
+    # http_error / unknown；成功时为 None。
+    error_code: str | None = None
+
+
 class ModelTemplateListQuery(BaseModel):
     """模型模板列表查询参数。"""
 

@@ -912,7 +912,26 @@
     "timeoutMin": "Timeout must be a positive integer no greater than 2147483647",
     "retryCountMin": "Retry count cannot be negative",
     "unsafeText": "{{field}} contains illegal HTML/script or suspected SQL injection content",
-    "deleteConfirm": "Delete this model template?"
+    "deleteConfirm": "Delete this model template?",
+    "testConnection": "Test connection",
+    "testingConnection": "Testing…",
+    "testOk": "Connection test passed",
+    "testFailed": "Connection test failed",
+    "testFailedWithDetail": "Connection test failed: {{detail}}.",
+    "testError": {
+      "timeout": "Request timed out. Check the API address and network, or increase the timeout",
+      "network": "Could not reach the model service. Check API Base, network, and proxy settings; for self-hosted services, confirm the service is up and the port is reachable",
+      "auth": "API key is invalid or revoked, or this account cannot access the endpoint. Check that the key is correct and has not expired or been deleted",
+      "balance": "Insufficient balance; the provider rejected the request (HTTP 402). Top up on the provider platform, then retry",
+      "rate_limit": "Too many requests, or concurrency/quota limits were hit. Try again later",
+      "not_found": "Endpoint not found (HTTP 404). Check that API Base is correct",
+      "model_not_found": "Model ID does not exist, or this account cannot use it. Check the model name (case and version), and enable it in the provider console if needed",
+      "target_blocked": "Target address is not allowed (for example loopback, link-local/cloud metadata, or an oversized response). Use a reachable API Base and retry",
+      "redirect": "The service returned a redirect (HTTP {{status}}) and the model endpoint was not reached. Use the final reachable API Base (for example http→https) and check that a login page or gateway is not intercepting the request",
+      "server": "The model provider is temporarily unavailable. Retry later, or check the provider status page",
+      "http_error": "Provider returned an error (HTTP {{status}}). Check API Base, key, and model settings",
+      "unknown": "Check API Base, API key, and network, then retry"
+    }
   },
   "embeddingTemplate": {
     "title": "Embedding models",

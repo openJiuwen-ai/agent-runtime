@@ -2496,20 +2496,19 @@ dialog.resource-preview::backdrop { background: rgb(0 0 0 / .24); }
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  flex: 1 1 27rem;
+  flex: 1 1 36rem;
   min-width: 0;
-  max-width: 30rem;
+  max-width: 42rem;
   margin-left: auto;
 }
 .cluster-resource-list__actions .cluster-resource-list__search {
   flex: 1 1 0;
   width: 0;
   min-width: 0;
-  max-width: 20rem;
+  max-width: 32rem;
 }
 .cluster-resource-list__actions .btn { flex: 0 0 auto; white-space: nowrap; }
 .cluster-resource-list__actions--selection { flex: 0 0 auto; }
-.cluster-resource-list > .manager-page-table { min-height: clamp(320px, calc(100dvh - 580px), 900px); }
 .cluster-detail-footer { display: flex; flex-direction: column; gap: 16px; margin-top: auto; flex-shrink: 0; }
 .cluster-detail-page .cluster-setting-card .manager-page-table { min-height: 300px; }
 .cluster-detail-page .cluster-setting-card .card:has(> .overflow-x-auto > .table) { min-height: 300px; background: var(--card); }

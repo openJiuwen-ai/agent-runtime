@@ -912,7 +912,26 @@
     "timeoutMin": "超时须为正整数，且不超过 2147483647",
     "retryCountMin": "重试次数不能小于 0",
     "unsafeText": "{{field}} 含有非法 HTML/脚本或疑似 SQL 注入内容，请修改后重试",
-    "deleteConfirm": "确认删除该模型模板？"
+    "deleteConfirm": "确认删除该模型模板？",
+    "testConnection": "测试连接",
+    "testingConnection": "正在测试…",
+    "testOk": "连接测试通过",
+    "testFailed": "连接测试失败",
+    "testFailedWithDetail": "连接测试失败：{{detail}}。",
+    "testError": {
+      "timeout": "请求超时，请检查 API 地址与网络，或适当增大超时时间",
+      "network": "无法连接到模型服务，请检查 API Base、网络连通性与代理设置；若使用自建服务，请确认服务已启动且端口可访问",
+      "auth": "API Key 无效或已被撤销，也可能是该账户无权访问此接口。请检查密钥是否填写正确、是否过期或已被删除",
+      "balance": "模型账户余额不足，服务商已拒绝本次请求（HTTP 402）。请先到模型服务商平台充值后重新测试",
+      "rate_limit": "模型服务请求过于频繁，或已达并发/额度上限，请稍后再试",
+      "not_found": "接口地址不存在（HTTP 404），请核对 API Base 是否填写正确",
+      "model_not_found": "模型 ID 不存在，或当前账户无权使用该模型。请核对模型名（注意大小写与版本号），必要时先在服务商控制台开通该模型",
+      "target_blocked": "目标地址不被允许（例如回环、链路本地/云元数据地址，或响应过大）。请更换可访问的 API Base 后重试",
+      "redirect": "服务返回了重定向（HTTP {{status}}），未实际到达模型接口。请改用最终可访问的 API Base（例如将 http 改为 https），并确认未被登录页或网关拦截",
+      "server": "模型服务商暂时不可用，请稍后重试；若持续失败，请查看服务商的状态页",
+      "http_error": "服务商返回错误（HTTP {{status}}），请检查 API Base、Key 与模型配置",
+      "unknown": "请检查 API Base、API Key 与网络后重试"
+    }
   },
   "embeddingTemplate": {
     "title": "向量模型",

@@ -137,11 +137,12 @@ export function LoginPage({ denied = false }: { denied?: boolean }) {
           </div>
         )}
 
-        <div className="mt-4" style={{ textAlign: 'center' }}>
+        {/* TODO: 暂时隐藏登录页文档入口，恢复时取消注释即可 */}
+        {/* <div className="mt-4" style={{ textAlign: 'center' }}>
           <button type="button" className="btn ghost sm" onClick={() => { window.location.href = '/docs'; }}>
             {t('docs.entry')}
           </button>
-        </div>
+        </div> */}
       </form>
     </div>
   );
