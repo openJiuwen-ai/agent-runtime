@@ -429,7 +429,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
         </div>
       </div>
 
-      <div className="card manager-page-table !p-0">
+      <div className="card !p-0">
         {loading ? (
           <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
         ) : rosterError ? (

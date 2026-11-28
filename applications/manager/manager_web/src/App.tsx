@@ -333,7 +333,8 @@ function Shell() {
           <ConfigGuideMenu />
         </div>
         <div className="flex items-center gap-3">
-          <button
+          {/* TODO: 暂时隐藏右上角文档入口，恢复时取消注释即可 */}
+          {/* <button
             type="button"
             className="btn ghost sm"
             onClick={() => {
@@ -341,7 +342,7 @@ function Shell() {
             }}
           >
             {t('docs.entry')}
-          </button>
+          </button> */}
           <ApprovalTodoButton />
           <LanguageSwitcher />
           <ThemeToggle />

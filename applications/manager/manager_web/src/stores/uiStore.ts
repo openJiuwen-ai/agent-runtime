@@ -8,12 +8,13 @@ export type Toast = {
 
 /** 离场动画时长，与 index.css 的 .toast-item--slide.leaving 保持一致 */
 const LEAVE_DURATION_MS = 300;
+const DEFAULT_TOAST_DURATION_MS = 4500;
 
 interface UiState {
   toasts: Toast[];
   /** 已进入离场动画、即将移除的 toast id */
   leavingIds: Set<string>;
-  pushToast: (t: Omit<Toast, 'id'>) => void;
+  pushToast: (t: Omit<Toast, 'id'> & { durationMs?: number }) => void;
   /** 先播放滑出动画，动画结束后才真正移除 */
   dismissToast: (id: string) => void;
 }
@@ -23,11 +24,12 @@ export const useUiStore = create<UiState>((set) => ({
   leavingIds: new Set<string>(),
   pushToast: (t) =>
     set((s) => {
+      const { durationMs, ...rest } = t;
       const id = `t-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
-      const toast: Toast = { id, ...t };
+      const toast: Toast = { id, ...rest };
       setTimeout(() => {
         useUiStore.getState().dismissToast(id);
-      }, 4500);
+      }, durationMs ?? DEFAULT_TOAST_DURATION_MS);
       return { toasts: [...s.toasts, toast] };
     }),
   dismissToast: (id) =>
@@ -50,6 +52,6 @@ export const useUiStore = create<UiState>((set) => ({
     }),
 }));
 
-export function toast(kind: Toast['kind'], message: string) {
-  useUiStore.getState().pushToast({ kind, message });
+export function toast(kind: Toast['kind'], message: string, durationMs?: number) {
+  useUiStore.getState().pushToast({ kind, message, durationMs });
 }

@@ -94,6 +94,7 @@ from manager_server.schemas.template_schemas import (
     ExtensionConfigTemplateCreateBody,
     ExtensionConfigTemplateListQuery,
     ExtensionConfigTemplateUpdateBody,
+    ModelTemplateConnectionTestBody,
     ModelTemplateCreateBody,
     ModelTemplateListQuery,
     ModelTemplateUpdateBody,
@@ -530,6 +531,17 @@ async def create_model_template(
     return ResponseModel(code=200, message="success", data=data.model_dump())
 
 
+@templates_router.post("/model-templates/test-connection", response_model=ResponseModel)
+async def test_model_template_connection_draft(
+    body: ModelTemplateConnectionTestBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    """用当前表单草稿探测 API Base / Key（不必先保存）。"""
+    svc = _model_template_svc(handler)
+    data = await svc.test_connection_draft(body)
+    return ResponseModel(code=200, message="success", data=data.model_dump())
+
+
 @templates_router.get("/model-templates", response_model=ResponseModel)
 async def list_model_templates(
     handler: Annotated[DBHandler, Depends(get_db_handler)],
@@ -589,6 +601,21 @@ async def delete_model_template(
     return ResponseModel(
         code=200, message="success", data={"deleted": True, "template_id": template_id}
     )
+
+
+@templates_router.post(
+    "/model-templates/{template_id}/test-connection", response_model=ResponseModel
+)
+async def test_model_template_connection(
+    template_id: TemplateIdPath,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    """用已保存模板探测 API Base / Key 连通性。"""
+    svc = _model_template_svc(handler)
+    data = await svc.test_connection(template_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="model template not found")
+    return ResponseModel(code=200, message="success", data=data.model_dump())
 
 
 # --- embedding_template ---

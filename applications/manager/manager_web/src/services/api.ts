@@ -1570,6 +1570,27 @@ export const DeploymentApi = {
 
 // ---------- Templates ----------
 
+export type ModelTemplateConnectionTestResult = {
+  ok: boolean;
+  latency_ms: number;
+  status_code?: number | null;
+  checked_url: string;
+  model_id_found?: boolean | null;
+  detail?: string | null;
+  /** 失败分类：timeout / network / auth / balance / rate_limit / not_found / model_not_found / target_blocked / redirect / server / http_error / unknown */
+  error_code?: string | null;
+};
+
+export type ModelTemplateConnectionTestBody = {
+  api_base: string;
+  api_key: string;
+  model_id: string;
+  model_provider: string;
+  timeout?: number;
+  verify_ssl?: boolean;
+  data?: Record<string, unknown> | null;
+};
+
 export const ModelTemplateApi = {
   list: (params?: {
     page?: number;
@@ -1597,6 +1618,16 @@ export const ModelTemplateApi = {
   remove: (id: string) =>
     http<{ deleted: boolean; template_id: string }>(`/v1/model-templates/${encodeURIComponent(id)}`, {
       method: 'DELETE',
+    }),
+  testConnection: (id: string) =>
+    http<ModelTemplateConnectionTestResult>(
+      `/v1/model-templates/${encodeURIComponent(id)}/test-connection`,
+      { method: 'POST' },
+    ),
+  testConnectionDraft: (body: ModelTemplateConnectionTestBody) =>
+    http<ModelTemplateConnectionTestResult>('/v1/model-templates/test-connection', {
+      method: 'POST',
+      body,
     }),
 };
 

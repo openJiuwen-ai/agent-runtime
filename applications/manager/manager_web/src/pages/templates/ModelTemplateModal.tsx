@@ -7,6 +7,7 @@ import { LimitedTextInput } from '../../components/LimitedTextInput';
 import { useFormDirty } from '../../hooks/useFormDirty';
 import { ModelTemplateApi, ApiError } from '../../services/api';
 import { toast } from '../../stores/uiStore';
+import { connectionTestFailureDetail } from './modelConnectionTestMessage';
 import { safeStringify } from '../../utils/format';
 import { INT32_MAX } from '../../utils/intBounds';
 import { jsonContentForValidation } from '../../utils/jsonExample';
@@ -147,6 +148,7 @@ export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) 
   const { markClean, isDirty } = useFormDirty(open);
   const [form, setForm] = useState<FormState>(empty);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [typeOpen, setTypeOpen] = useState(false);
   const typeRef = useRef<HTMLDivElement>(null);
 
@@ -282,6 +284,71 @@ export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) 
     }
   };
 
+  const testConnection = async () => {
+    if (testing || saving) return;
+    const requiredChecks: { label: string; invalid: boolean }[] = [
+      { label: t('modelTemplate.modelProvider'), invalid: !form.model_provider.trim() },
+      { label: t('modelTemplate.modelId'), invalid: !form.model_id.trim() },
+      { label: t('modelTemplate.apiBase'), invalid: !form.api_base.trim() },
+      { label: t('modelTemplate.apiKey'), invalid: !form.api_key.trim() },
+    ];
+    const missing = requiredChecks.find((item) => item.invalid);
+    if (missing) {
+      toast('warn', t('modelTemplate.fieldRequired', { field: missing.label }));
+      return;
+    }
+    if (!isValidHttpUrl(form.api_base)) {
+      toast('warn', t('modelTemplate.apiBaseInvalid'));
+      return;
+    }
+    const headersErr = checkJson(form.headers);
+    if (headersErr) {
+      toast('danger', headersErr);
+      return;
+    }
+    const parsedHeaders = parseHeadersObject(form.headers);
+    if (parsedHeaders === undefined) {
+      toast('warn', t('modelTemplate.headersMustBeObject'));
+      return;
+    }
+    const nextData = buildTemplateData(template?.data, parsedHeaders);
+    setTesting(true);
+    try {
+      const result = await ModelTemplateApi.testConnectionDraft({
+        api_base: form.api_base.trim(),
+        api_key: form.api_key,
+        model_id: form.model_id.trim(),
+        model_provider: form.model_provider.trim(),
+        timeout: Number.isInteger(form.timeout) && form.timeout > 0 ? form.timeout : 15,
+        verify_ssl: form.verify_ssl,
+        data: nextData,
+      });
+      if (!result.ok) {
+        const detail = connectionTestFailureDetail(result, t);
+        toast(
+          'danger',
+          detail
+            ? t('modelTemplate.testFailedWithDetail', { detail })
+            : t('modelTemplate.testFailed'),
+          9000,
+        );
+        return;
+      }
+      toast('success', t('modelTemplate.testOk'));
+    } catch (e) {
+      const detail = (e instanceof ApiError ? e.detail : '').trim();
+      toast(
+        'danger',
+        detail
+          ? t('modelTemplate.testFailedWithDetail', { detail })
+          : t('modelTemplate.testFailed'),
+        9000,
+      );
+    } finally {
+      setTesting(false);
+    }
+  };
+
   return (
     <Modal
       open={open}
@@ -292,7 +359,10 @@ export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) 
       footer={
         <>
           <ModalCancelButton />
-          <button className="btn primary" onClick={submit} disabled={saving}>
+          <button className="btn" onClick={() => void testConnection()} disabled={saving || testing}>
+            {testing ? t('modelTemplate.testingConnection') : t('modelTemplate.testConnection')}
+          </button>
+          <button className="btn primary" onClick={submit} disabled={saving || testing}>
             {saving ? t('common.loading') : t('common.save')}
           </button>
         </>

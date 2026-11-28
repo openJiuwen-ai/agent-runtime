@@ -13,7 +13,12 @@ from manager_server.core.template.push_template_to_gateway import (
     update_template_on_referencing_gateways,
     delete_template_on_referencing_gateways,
 )
+from manager_server.core.template.model_template_connectivity import (
+    probe_model_template_connection,
+)
 from manager_server.schemas.template_schemas import (
+    ModelTemplateConnectionTestBody,
+    ModelTemplateConnectionTestOut,
     ModelTemplateCreateBody,
     ModelTemplateListQuery,
     ModelTemplateOut,
@@ -255,3 +260,36 @@ class ModelTemplateService:
         return await self._handler.delete(
             _MODEL_TEMPLATE_TABLE, {"template_id": template_id}
         )
+
+    async def test_connection_draft(
+        self, body: ModelTemplateConnectionTestBody
+    ) -> ModelTemplateConnectionTestOut:
+        result = await probe_model_template_connection(
+            api_base=body.api_base,
+            api_key=body.api_key,
+            model_id=body.model_id,
+            model_provider=body.model_provider,
+            timeout=body.timeout,
+            verify_ssl=body.verify_ssl,
+            data=body.data,
+        )
+        return ModelTemplateConnectionTestOut.model_validate(result)
+
+    async def test_connection(
+        self, template_id: str
+    ) -> ModelTemplateConnectionTestOut | None:
+        row = await self._handler.get(
+            _MODEL_TEMPLATE_TABLE, {"template_id": template_id}
+        )
+        if row is None:
+            return None
+        result = await probe_model_template_connection(
+            api_base=str(row.api_base or ""),
+            api_key=str(row.api_key or ""),
+            model_id=str(row.model_id or ""),
+            model_provider=str(row.model_provider or ""),
+            timeout=getattr(row, "timeout", None),
+            verify_ssl=bool(getattr(row, "verify_ssl", False)),
+            data=getattr(row, "data", None) if isinstance(getattr(row, "data", None), dict) else None,
+        )
+        return ModelTemplateConnectionTestOut.model_validate(result)
